@@ -289,13 +289,20 @@ echo "Built: $OUT_LIB ($(wc -c < "$OUT_LIB" | tr -d ' ') bytes)"
 # here reaches nothing: the app would keep linking the previous objects and the
 # build would look clean. Replace our members in place and re-index.
 COMBINED="$BUILD_DIR/libdxmt_combined.a"
+APP_COPY="$REPO_ROOT/app/Madeira/libdxmt_combined.a"
 if [ -f "$COMBINED" ]; then
     echo "=== Refreshing libdxmt_combined.a ==="
     xcrun -sdk iphoneos ar r "$COMBINED" "$OBJ_DIR"/*.o
     xcrun -sdk iphoneos ranlib "$COMBINED"
-    echo "Refreshed: $COMBINED ($(wc -c < "$COMBINED" | tr -d ' ') bytes)"
-    APP_COPY="$REPO_ROOT/app/Madeira/libdxmt_combined.a"
-    if [ -f "$APP_COPY" ]; then cp "$COMBINED" "$APP_COPY"; echo "Staged: $APP_COPY"; fi
 else
-    echo "NOTE: $COMBINED absent; the app links that file, so build it before deploying."
+    echo "=== Creating clean libdxmt_combined.a ==="
+    LLVM_LIB_DIR="$REPO_ROOT/toolchains/llvm-ios-build/lib"
+    if ! compgen -G "$LLVM_LIB_DIR/*.a" >/dev/null; then
+        echo "ERROR: no iOS LLVM archives in $LLVM_LIB_DIR" >&2
+        exit 1
+    fi
+    xcrun -sdk iphoneos libtool -static -o "$COMBINED"         "$OBJ_DIR"/*.o "$LLVM_LIB_DIR"/*.a
 fi
+echo "Combined: $COMBINED ($(wc -c < "$COMBINED" | tr -d ' ') bytes)"
+cp "$COMBINED" "$APP_COPY"
+echo "Staged: $APP_COPY"
