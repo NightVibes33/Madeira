@@ -12,6 +12,7 @@ Baseline frozen from the current Madeira upstream before SteamOS-iOS Linux-perso
 | DXMT | `willfaust/dxmt` | `a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef` |
 | rpmalloc (nested under FEX) | `willfaust/rpmalloc` | `812c2b9cf4310ffacf14e6b64066e78ab0c394b5` |
 | FreeType 2.13.3 | `freetype/freetype` (`VER-2-13-3`) | `42608f77f20749dd6ddc9e0536788eaad70ea4b5` |
+| LLVM project (DXMT/airconv iOS static libs) | `llvm/llvm-project` | `8dfdcc7b7bf66834a761bd8de445840ef68e4d1a` |
 
 The `steamos-ios` development branch and the `baseline-madeira-ios` freeze branch were both created from the exact Madeira superproject commit above. The freeze branch must not receive SteamOS-iOS changes.
 

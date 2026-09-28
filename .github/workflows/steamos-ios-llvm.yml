@@ -1,0 +1,48 @@
+name: SteamOS-iOS LLVM iOS build gate
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-llvm.yml"
+      - "build/llvm-ios/**"
+      - "tools/runtime-deps/fetch-llvm-project.sh"
+      - "docs/STEAMOS_IOS_BASELINE.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-llvm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  llvm-ios-clean:
+    name: clean LLVM static libraries for iOS
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build tool
+        run: brew install ninja
+
+      - name: Materialize pinned llvm-project
+        run: bash tools/runtime-deps/fetch-llvm-project.sh
+
+      - name: Build host tablegen + iOS archives
+        run: bash build/llvm-ios/build.sh
+
+      - name: Verify pin and archive architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C toolchains/llvm-project rev-parse HEAD)" = "8dfdcc7b7bf66834a761bd8de445840ef68e4d1a"
+          for a in libLLVMCore.a libLLVMIRReader.a libLLVMBitReader.a libLLVMBitWriter.a libLLVMSupport.a; do
+            test -s "toolchains/llvm-ios-build/lib/$a"
+            lipo -info "toolchains/llvm-ios-build/lib/$a" | grep -q arm64
+          done
+          echo "LLVM_IOS_GATE_OK"
