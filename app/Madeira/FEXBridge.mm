@@ -3,6 +3,7 @@
 
 #include "FEXBridge.h"
 #include "JITAllocator.h"
+#include "../../runtime/linux/elf/elf64_image.h"
 
 // Xcode defines DEBUG=1 in debug builds which conflicts with FEX's LogMan::DEBUG enum
 #ifdef DEBUG
@@ -551,107 +552,89 @@ int64_t fex_test_execute(void) {
     }
 
     // ---------------------------------------------------------------------------
-    // ELF Loader: Load a statically-linked x86-64 ELF binary
+    // SteamOS-iOS ELF loader: hardened validation/load plan + FEX execution.
     // ---------------------------------------------------------------------------
-    struct Elf64_Ehdr {
-        uint8_t  e_ident[16];
-        uint16_t e_type, e_machine;
-        uint32_t e_version;
-        uint64_t e_entry, e_phoff, e_shoff;
-        uint32_t e_flags;
-        uint16_t e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx;
-    };
-    struct Elf64_Phdr {
-        uint32_t p_type;
-        uint32_t p_flags;
-        uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align;
-    };
-    constexpr uint32_t PT_LOAD = 1;
-
     const uint8_t *elf_data = steamos_ios_static_smoke_elf;
-    size_t elf_size = steamos_ios_static_smoke_elf_len;
+    const size_t elf_size = steamos_ios_static_smoke_elf_len;
 
-    auto *ehdr = reinterpret_cast<const Elf64_Ehdr*>(elf_data);
-
-    // Validate ELF
-    if (elf_size < sizeof(Elf64_Ehdr) ||
-        ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
-        ehdr->e_ident[2] != 'L'  || ehdr->e_ident[3] != 'F' ||
-        ehdr->e_ident[4] != 2    || // 64-bit
-        ehdr->e_machine != 0x3E) {  // x86-64
-        fex_log("FAIL: Invalid ELF binary");
+    steamos_elf64_image elf_image{};
+    const steamos_elf64_error elf_error =
+        steamos_elf64_parse(elf_data, elf_size, JIT_PAGE_SIZE, &elf_image);
+    if (elf_error != STEAMOS_ELF64_OK) {
+        fex_log("STEAMOS_IOS_L0_FAIL ELF parse: %s",
+                steamos_elf64_error_string(elf_error));
         running.store(false);
         return -1;
     }
 
-    fex_log("ELF: entry=0x%llx, %d program headers",
-            (unsigned long long)ehdr->e_entry, ehdr->e_phnum);
+    fex_log("ELF: entry=0x%llx, %u LOAD segments",
+            (unsigned long long)elf_image.entry,
+            (unsigned)elf_image.load_count);
 
-    // Find the address range spanned by all PT_LOAD segments
-    uint64_t load_min = UINT64_MAX, load_max = 0;
-    constexpr uint64_t page_mask = 0x3FFF; // 16KB iOS pages
-    for (int i = 0; i < ehdr->e_phnum && i < 8; i++) {
-        auto *phdr = reinterpret_cast<const Elf64_Phdr*>(elf_data + ehdr->e_phoff + i * ehdr->e_phentsize);
-        if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0) continue;
-        uint64_t seg_start = phdr->p_vaddr & ~page_mask;
-        uint64_t seg_end = (phdr->p_vaddr + phdr->p_memsz + page_mask) & ~page_mask;
-        if (seg_start < load_min) load_min = seg_start;
-        if (seg_end > load_max) load_max = seg_end;
+    const uint64_t load_span = elf_image.load_max - elf_image.load_min;
+    if (!load_span || load_span > SIZE_MAX) {
+        fex_log("STEAMOS_IOS_L0_FAIL invalid ELF load span: 0x%llx",
+                (unsigned long long)load_span);
+        running.store(false);
+        return -1;
     }
-    size_t total_map_size = load_max - load_min;
+    const size_t total_map_size = static_cast<size_t>(load_span);
     fex_log("ELF: address range [0x%llx, 0x%llx), total %zu bytes",
-            (unsigned long long)load_min, (unsigned long long)load_max, total_map_size);
+            (unsigned long long)elf_image.load_min,
+            (unsigned long long)elf_image.load_max,
+            total_map_size);
 
-    // Allocate a single contiguous region at any available address.
-    // iOS reserves low virtual addresses, so we let the OS choose.
+    // Guest ELF memory is data from the host's perspective; FEX translates
+    // x86-64 instructions into the separate RX/RW JIT arena.
     void *elf_base = ::mmap(nullptr, total_map_size, PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (elf_base == MAP_FAILED) {
-        fex_log("FAIL: Could not allocate %zu bytes for ELF: %s", total_map_size, strerror(errno));
+        fex_log("FAIL: Could not allocate %zu bytes for ELF: %s",
+                total_map_size, strerror(errno));
         running.store(false);
         return -1;
     }
 
-    // The offset to apply: actual_addr = original_vaddr - load_min + elf_base
-    int64_t load_bias = reinterpret_cast<int64_t>(elf_base) - static_cast<int64_t>(load_min);
+    const intptr_t load_bias =
+        reinterpret_cast<intptr_t>(elf_base) - static_cast<intptr_t>(elf_image.load_min);
     fex_log("ELF: mapped at %p, load_bias=0x%llx (original base 0x%llx)",
-            elf_base, (unsigned long long)load_bias, (unsigned long long)load_min);
+            elf_base, (unsigned long long)load_bias,
+            (unsigned long long)elf_image.load_min);
 
-    // Track for cleanup
     struct MappedRegion { void *addr; size_t size; };
-    MappedRegion mapped_regions[1];
-    mapped_regions[0] = {elf_base, total_map_size};
-    int num_mapped = 1;
+    MappedRegion mapped_regions[1] = {{elf_base, total_map_size}};
+    const int num_mapped = 1;
 
-    // Copy PT_LOAD segment data into the allocated region
-    for (int i = 0; i < ehdr->e_phnum && i < 8; i++) {
-        auto *phdr = reinterpret_cast<const Elf64_Phdr*>(elf_data + ehdr->e_phoff + i * ehdr->e_phentsize);
-        if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0) continue;
+    for (uint16_t i = 0; i < elf_image.load_count; ++i) {
+        const steamos_elf64_segment &seg = elf_image.load[i];
+        const uint64_t relative = seg.virtual_address - elf_image.load_min;
+        uint8_t *destination = static_cast<uint8_t *>(elf_base) + relative;
 
-        fex_log("ELF: LOAD vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=%c%c%c → actual 0x%llx",
-                (unsigned long long)phdr->p_vaddr,
-                (unsigned long long)phdr->p_filesz,
-                (unsigned long long)phdr->p_memsz,
-                (phdr->p_flags & 4) ? 'R' : '-',
-                (phdr->p_flags & 2) ? 'W' : '-',
-                (phdr->p_flags & 1) ? 'X' : '-',
-                (unsigned long long)(phdr->p_vaddr + load_bias));
+        fex_log("ELF: LOAD vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=%c%c%c -> actual %p",
+                (unsigned long long)seg.virtual_address,
+                (unsigned long long)seg.file_size,
+                (unsigned long long)seg.memory_size,
+                (seg.flags & STEAMOS_ELF64_PF_R) ? 'R' : '-',
+                (seg.flags & STEAMOS_ELF64_PF_W) ? 'W' : '-',
+                (seg.flags & STEAMOS_ELF64_PF_X) ? 'X' : '-',
+                destination);
 
-        // Copy file data at the biased address
-        if (phdr->p_filesz > 0) {
-            memcpy(reinterpret_cast<void*>(phdr->p_vaddr + load_bias),
-                   elf_data + phdr->p_offset, phdr->p_filesz);
+        if (seg.file_size) {
+            memcpy(destination, elf_data + seg.file_offset,
+                   static_cast<size_t>(seg.file_size));
         }
-        // BSS (memsz > filesz) is already zeroed by mmap
     }
 
-    uint64_t code_addr = ehdr->e_entry + load_bias;
-    fex_log("ELF loaded: entry point = 0x%llx (biased from 0x%llx), %d segments mapped",
-            (unsigned long long)code_addr, (unsigned long long)ehdr->e_entry, num_mapped);
+    const uint64_t code_addr =
+        reinterpret_cast<uint64_t>(elf_base) + (elf_image.entry - elf_image.load_min);
+    fex_log("ELF loaded: entry point = 0x%llx (guest 0x%llx), %d mapping",
+            (unsigned long long)code_addr,
+            (unsigned long long)elf_image.entry,
+            num_mapped);
 
-    // Verify entry point is readable
-    uint8_t firstByte = *reinterpret_cast<uint8_t*>(code_addr);
-    fex_log("First byte at entry 0x%llx: 0x%02x", (unsigned long long)code_addr, firstByte);
+    const uint8_t firstByte = *reinterpret_cast<const uint8_t *>(code_addr);
+    fex_log("First byte at entry 0x%llx: 0x%02x",
+            (unsigned long long)code_addr, firstByte);
 
     // Allocate a guest stack (separate from ELF segments)
     const uint64_t GUEST_STACK_SIZE = 0x10000; // 64KB
