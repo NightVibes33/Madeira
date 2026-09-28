@@ -12,13 +12,14 @@ SHIMS_DIR="$REPO_ROOT/build/ntdll-unix/shims"
 OBJ_DIR="$BUILD_DIR/obj"
 mkdir -p "$OBJ_DIR"
 
-# Copy the base library if we don't have one yet
+# Seed from an existing app archive when available. On a clean checkout,
+# build the base archive from the exact pinned Wine server sources instead of
+# depending on developer-machine state.
 if [ ! -f "$OBJ_DIR/libwineserver.a" ]; then
     if [ -f "$APP_LIB" ]; then
         cp "$APP_LIB" "$OBJ_DIR/libwineserver.a"
     else
-        echo "ERROR: No base libwineserver.a found"
-        exit 1
+        "$BUILD_DIR/bootstrap-base.sh"
     fi
 fi
 
