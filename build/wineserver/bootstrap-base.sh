@@ -76,7 +76,14 @@ for name in "${BASE_SOURCES[@]}"; do
 done
 
 ar rcs "$OUT_LIB" "$BASE_OBJ"/*.o
-member_count="$(ar -t "$OUT_LIB" | wc -l | tr -d ' ')"
+member_count="$(ar -t "$OUT_LIB" | grep -E '\\.o
+[[ "$member_count" -eq "${#BASE_SOURCES[@]}" ]] || {
+    echo "error: base archive member mismatch: got $member_count expected ${#BASE_SOURCES[@]}" >&2
+    exit 1
+}
+
+echo "WINESERVER_BASE_OK members=$member_count archive=$OUT_LIB"
+ | wc -l | tr -d ' ')"
 [[ "$member_count" -eq "${#BASE_SOURCES[@]}" ]] || {
     echo "error: base archive member mismatch: got $member_count expected ${#BASE_SOURCES[@]}" >&2
     exit 1
