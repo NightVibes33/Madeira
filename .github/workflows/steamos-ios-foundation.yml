@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: steamos-ios-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   foundation:
     name: Pins + ELF L0 host gate
