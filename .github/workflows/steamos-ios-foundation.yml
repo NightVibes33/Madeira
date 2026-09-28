@@ -5,6 +5,10 @@ on:
     branches: [main, steamos-ios]
   workflow_dispatch:
 
+concurrency:
+  group: steamos-ios-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
