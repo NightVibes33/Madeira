@@ -61,6 +61,7 @@ static void bad_magic(unsigned char *b, size_t n) { (void)n; b[0] = 0; }
 static void bad_class(unsigned char *b, size_t n) { (void)n; b[4] = 1; }
 static void bad_machine(unsigned char *b, size_t n) { (void)n; put_u16(b + 18, 3); }
 static void bad_phdr_bounds(unsigned char *b, size_t n) { (void)n; put_u64(b + 32, ~0ULL - 8); }
+static void dynamic_interp(unsigned char *b, size_t n) { (void)n; memcpy(b + 64, "\x03\x00\x00\x00", 4); }
 static void bad_segment_size(unsigned char *b, size_t n) {
     (void)n; put_u64(b + 64 + 32, 32); put_u64(b + 64 + 40, 16);
 }
@@ -111,6 +112,7 @@ int main(int argc, char **argv)
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_CLASS, bad_class, "bad class");
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_MACHINE, bad_machine, "bad machine");
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_PHDR_BOUNDS, bad_phdr_bounds, "phdr bounds");
+    failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_INTERPRETER_UNSUPPORTED, dynamic_interp, "PT_INTERP L1 guard");
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_SEGMENT_SIZE, bad_segment_size, "segment size");
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_SEGMENT_BOUNDS, bad_segment_bounds, "segment bounds");
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_ENTRY_NOT_EXECUTABLE, bad_entry, "entry coverage");
