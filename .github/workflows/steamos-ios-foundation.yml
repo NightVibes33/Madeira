@@ -102,3 +102,34 @@ jobs:
           count="$(ar -t app/Madeira/libwineserver.a | wc -l | tr -d ' ')"
           test "$count" -ge 40
           echo "WINESERVER_CLEAN_BUILD_OK members=$count"
+
+  fex-ios-clean:
+    name: clean-clone FEX iOS archives
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned FEX recursively
+        run: git submodule update --init --recursive --depth 1 FEX
+
+      - name: Verify pins including rpmalloc
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Install FEX build prerequisites
+        run: brew install ccache
+
+      - name: Build FEXCore for iOS
+        run: bash build/fex-ios/build.sh
+
+      - name: Verify app link inputs
+        run: |
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore.a
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
+          test -s FEX/build-ios/FEXCore/Source/libJemallocLibs.a
+          test -s FEX/build-ios/External/fmt/libfmt.a
+          test -s FEX/build-ios/External/cephes/libcephes_128bit.a
+          test -s FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a
+          test -s FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a
+          echo "FEX_IOS_CLEAN_BUILD_OK"
