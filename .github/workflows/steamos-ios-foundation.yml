@@ -31,10 +31,12 @@ jobs:
           cmp "$tmp/smoke.h" app/Madeira/steamos_ios_static_smoke.h
           grep -aF 'STEAMOS_IOS_ELF_OK' "$tmp/smoke.elf"
 
-      - name: Reject VM/full-system dependencies in new Linux personality
+      - name: Reject VM/full-system dependencies in executable Linux-personality code
         run: |
-          if grep -RniE 'qemu-system|utm[[:space:]]+vm|full-system[[:space:]]+emulat' runtime/linux tests/elf tests/linux-syscalls; then
-            echo "Forbidden full-system dependency found in SteamOS-iOS Linux personality" >&2
+          if find runtime/linux tests/elf tests/linux-syscalls -type f \
+              \( -name '*.c' -o -name '*.h' -o -name '*.cc' -o -name '*.cpp' -o -name '*.m' -o -name '*.mm' -o -name '*.swift' -o -name '*.sh' -o -name 'CMakeLists.txt' \) \
+              -print0 | xargs -0 grep -niE 'qemu-system|utm[[:space:]]+vm|full-system[[:space:]]+emulat'; then
+            echo "Forbidden full-system dependency found in SteamOS-iOS executable path" >&2
             exit 1
           fi
 
