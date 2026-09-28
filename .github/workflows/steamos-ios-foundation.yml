@@ -2,7 +2,7 @@ name: SteamOS-iOS foundation gates
 
 on:
   push:
-    branches: [steamos-ios]
+    branches: [main, steamos-ios]
   workflow_dispatch:
 
 permissions:
