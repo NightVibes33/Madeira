@@ -69,7 +69,10 @@ static void bad_segment_bounds(unsigned char *b, size_t n) {
 }
 static void bad_entry(unsigned char *b, size_t n) { (void)n; put_u64(b + 24, 0x500000); }
 static void bad_address_overflow(unsigned char *b, size_t n) {
-    (void)n; put_u64(b + 64 + 16, ~0ULL - 7); put_u64(b + 64 + 40, 16);
+    (void)n;
+    put_u64(b + 64 + 16, ~0ULL - 7); /* p_vaddr */
+    put_u64(b + 64 + 32, 0);         /* p_filesz: do not trip size validation first */
+    put_u64(b + 64 + 40, 16);        /* p_memsz: vaddr + memsz overflows */
 }
 
 int main(int argc, char **argv)
