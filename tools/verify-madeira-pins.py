@@ -7,8 +7,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+BASELINE = "9e8291eb42519b35b3d40b5f915c3a5f6d4fff45"
 EXPECTED = {
-    ".": "9e8291eb42519b35b3d40b5f915c3a5f6d4fff45",
     "FEX": "2838f3be52437620348264ada6c41042a9085290",
     "wine": "8e3d23c77ceb903b59fdd8c123c867b7591490d5",
     "research/dxmt": "a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef",
@@ -23,6 +23,14 @@ def rev(path: str) -> str:
 
 def main() -> int:
     failed = False
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", BASELINE, "HEAD"],
+        cwd=ROOT,
+        check=False,
+    ).returncode == 0
+    print(f"BASELINE_{'OK' if ancestor else 'DRIFT'} ancestor={BASELINE}")
+    failed |= not ancestor
+
     for path, expected in EXPECTED.items():
         try:
             actual = rev(path)
