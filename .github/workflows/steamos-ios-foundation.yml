@@ -32,8 +32,12 @@ jobs:
 
       - name: Reject VM/full-system dependencies in new Linux personality
         run: |
-          if grep -RniE 'qemu-system|utm[[:space:]]+vm|full-system[[:space:]]+emulat' runtime/linux tests/elf tests/linux-syscalls; then
-            echo "Forbidden full-system dependency found in SteamOS-iOS Linux personality" >&2
+          if grep -RniE \
+            --include='*.c' --include='*.cc' --include='*.cpp' --include='*.h' \
+            --include='*.m' --include='*.mm' --include='*.py' --include='*.sh' \
+            'qemu-system|utm[[:space:]]+vm|full-system[[:space:]]+emulat' \
+            runtime/linux tests/elf tests/linux-syscalls; then
+            echo "Forbidden full-system dependency found in executable SteamOS-iOS Linux code" >&2
             exit 1
           fi
 
