@@ -17,6 +17,7 @@
 #define ET_DYN 3
 #define EM_X86_64 62
 #define PT_LOAD 1
+#define PT_INTERP 3
 
 struct elf64_ehdr_wire {
     uint8_t e_ident[16];
@@ -121,6 +122,8 @@ enum steamos_elf64_error steamos_elf64_parse(
         uint64_t file_end, mem_end, map_end, map_start;
 
         memcpy(&ph, data + ph_offset, sizeof(ph));
+        if (ph.p_type == PT_INTERP)
+            return STEAMOS_ELF64_ERR_INTERPRETER_UNSUPPORTED;
         if (ph.p_type != PT_LOAD || !ph.p_memsz) continue;
         if (load_count == STEAMOS_ELF64_MAX_LOAD_SEGMENTS)
             return STEAMOS_ELF64_ERR_TOO_MANY_SEGMENTS;
@@ -173,6 +176,7 @@ const char *steamos_elf64_error_string(enum steamos_elf64_error error)
     case STEAMOS_ELF64_ERR_MACHINE: return "ELF is not x86-64";
     case STEAMOS_ELF64_ERR_PHENTSIZE: return "unexpected program-header size";
     case STEAMOS_ELF64_ERR_PHDR_BOUNDS: return "program-header table is out of bounds";
+    case STEAMOS_ELF64_ERR_INTERPRETER_UNSUPPORTED: return "PT_INTERP requires the L1 dynamic loader";
     case STEAMOS_ELF64_ERR_SEGMENT_BOUNDS: return "load segment exceeds file bounds";
     case STEAMOS_ELF64_ERR_SEGMENT_SIZE: return "load segment file size exceeds memory size";
     case STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW: return "ELF address arithmetic overflow";
