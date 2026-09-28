@@ -695,12 +695,15 @@ int64_t fex_test_execute(void) {
 
     // Allocate call-ret shadow stack (needed for call/ret instructions).
     // On Linux this is done by LinuxEmulation/ThreadManager; on iOS we do it here.
+    void *callret_alloc = MAP_FAILED;
+    size_t callret_alloc_size = 0;
     {
         constexpr size_t CALLRET_STACK_SIZE = FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE; // 4MB
         constexpr size_t PAGE_SIZE = 0x4000; // 16KB iOS pages
         constexpr size_t ALLOC_SIZE = CALLRET_STACK_SIZE + 2 * PAGE_SIZE; // guard pages on both sides
+        callret_alloc_size = ALLOC_SIZE;
 
-        void *callret_alloc = ::mmap(nullptr, ALLOC_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        callret_alloc = ::mmap(nullptr, ALLOC_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (callret_alloc == MAP_FAILED) {
             fex_log("FAIL: Could not allocate call-ret stack");
             g_ctx->DestroyThread(Thread);
@@ -781,8 +784,6 @@ int64_t fex_test_execute(void) {
         }
         fex_log("WATCHDOG: Execution timed out after 5s!");
     });
-    watchdog.detach();
-
     fex_log("Executing x86-64 code through FEXCore...");
 
     if (setjmp(g_exit_jmp) == 0) {
@@ -796,6 +797,9 @@ int64_t fex_test_execute(void) {
     }
 
     execution_done.store(true);
+    // The watchdog captures Thread and execution_done. Join it before either
+    // object goes out of scope; detaching here creates a use-after-scope race.
+    if (watchdog.joinable()) watchdog.join();
 
     g_exit_jmp_set = false;
     g_guest_stdout_capture_enabled = false;
@@ -810,6 +814,9 @@ int64_t fex_test_execute(void) {
     fex_log("CPU state: RAX=%lld, RDI=%lld", rax_val, rdi_val);
 
     g_ctx->DestroyThread(Thread);
+    if (callret_alloc != MAP_FAILED && callret_alloc_size) {
+        ::munmap(callret_alloc, callret_alloc_size);
+    }
     for (int i = 0; i < num_mapped; i++) {
         ::munmap(mapped_regions[i].addr, mapped_regions[i].size);
     }
