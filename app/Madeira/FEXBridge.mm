@@ -39,8 +39,9 @@
 #include <execinfo.h>
 #include <signal.h>
 
-// Embedded x86-64 ELF binary (Hello World, statically linked)
+// Existing Madeira regression fixture plus the SteamOS-iOS L0 fixture.
 #include "hello_x86.h"
+#include "steamos_ios_static_smoke.h"
 
 // __clear_cache is a compiler-rt builtin for icache invalidation.
 // On iOS ARM64 we provide it via sys_icache_invalidate.
@@ -214,6 +215,13 @@ static jmp_buf g_exit_jmp;
 static int64_t g_exit_code = 0;
 static bool g_exit_jmp_set = false;
 
+// SteamOS-iOS L0 captures guest stdout so success requires the guest to have
+// actually executed its Linux write(2) syscall with the exact discriminator.
+static constexpr char kSteamOSL0Expected[] = "STEAMOS_IOS_ELF_OK\n";
+static char g_guest_stdout_capture[256] = {};
+static size_t g_guest_stdout_capture_size = 0;
+static bool g_guest_stdout_capture_enabled = false;
+
 // ---------------------------------------------------------------------------
 // Minimal SyscallHandler for FEXCore
 // Handles basic syscalls so FEXCore can initialize and run trivial x86 code
@@ -244,6 +252,14 @@ public:
 
             if (fd == 1 || fd == 2) {
                 // stdout/stderr
+                if (fd == 1 && g_guest_stdout_capture_enabled) {
+                    const size_t available = sizeof(g_guest_stdout_capture) - g_guest_stdout_capture_size;
+                    const size_t copy_size = count < available ? count : available;
+                    if (copy_size) {
+                        memcpy(g_guest_stdout_capture + g_guest_stdout_capture_size, buf, copy_size);
+                        g_guest_stdout_capture_size += copy_size;
+                    }
+                }
                 fex_log("[x86 write fd=%d] %.*s", fd, (int)count, buf);
                 return count;
             }
@@ -552,8 +568,8 @@ int64_t fex_test_execute(void) {
     };
     constexpr uint32_t PT_LOAD = 1;
 
-    const uint8_t *elf_data = hello_x86_elf;
-    size_t elf_size = hello_x86_elf_len;
+    const uint8_t *elf_data = steamos_ios_static_smoke_elf;
+    size_t elf_size = steamos_ios_static_smoke_elf_len;
 
     auto *ehdr = reinterpret_cast<const Elf64_Ehdr*>(elf_data);
 
@@ -743,6 +759,9 @@ int64_t fex_test_execute(void) {
 
     g_exit_code = 0;
     g_exit_jmp_set = true;
+    g_guest_stdout_capture_size = 0;
+    memset(g_guest_stdout_capture, 0, sizeof(g_guest_stdout_capture));
+    g_guest_stdout_capture_enabled = true;
 
     iOSSyscallHandler::syscall_count.store(0);
     std::atomic<bool> execution_done{false};
@@ -779,6 +798,7 @@ int64_t fex_test_execute(void) {
     execution_done.store(true);
 
     g_exit_jmp_set = false;
+    g_guest_stdout_capture_enabled = false;
 
     // Read the exit code (set by SyscallHandler before longjmp)
     int64_t exit_code = g_exit_code;
@@ -795,15 +815,24 @@ int64_t fex_test_execute(void) {
     }
     ::munmap(stack_mem, GUEST_STACK_SIZE);
 
-    if (exit_code == 0) {
-        fex_log("=== FEX ELF test PASSED: Hello World exited with code 0 ===");
+    const bool stdout_ok =
+        g_guest_stdout_capture_size == sizeof(kSteamOSL0Expected) - 1 &&
+        memcmp(g_guest_stdout_capture, kSteamOSL0Expected, sizeof(kSteamOSL0Expected) - 1) == 0;
+
+    if (exit_code == 0 && stdout_ok) {
+        fex_log("=== STEAMOS_IOS_L0_PASS output=STEAMOS_IOS_ELF_OK exit=0 ===");
         cached_result.store(0);
         running.store(false);
         return 0;
     }
 
+    if (!stdout_ok) {
+        fex_log("=== STEAMOS_IOS_L0_FAIL stdout mismatch: captured=%zu expected=%zu ===",
+                g_guest_stdout_capture_size, sizeof(kSteamOSL0Expected) - 1);
+    }
     fex_log("=== FEX ELF test result: exit_code=%lld, RAX=%lld, RDI=%lld ===", exit_code, rax_val, rdi_val);
-    cached_result.store(static_cast<int64_t>(exit_code));
+    const int64_t result = exit_code == 0 ? -2 : exit_code;
+    cached_result.store(result);
     running.store(false);
-    return static_cast<int64_t>(exit_code);
+    return result;
 }
