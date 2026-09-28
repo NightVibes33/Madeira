@@ -46,17 +46,21 @@ jobs:
           fi
 
   macos-source:
-    name: macOS/Xcode source gate
-    runs-on: macos-15
+    name: Xcode 27 source gate
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Toolchain identity
+        shell: bash
         run: |
+          set -euo pipefail
           xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "IPHONEOS_SDK=$sdk"
+          [[ "$sdk" == 27.* ]]
           clang --version
 
       - name: Verify project enumerates
