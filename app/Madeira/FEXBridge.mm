@@ -4,6 +4,7 @@
 #include "FEXBridge.h"
 #include "JITAllocator.h"
 #include "../../runtime/linux/elf/elf64_image.h"
+#include "../../runtime/linux/syscalls/syscall_dispatch.h"
 
 // Xcode defines DEBUG=1 in debug builds which conflicts with FEX's LogMan::DEBUG enum
 #ifdef DEBUG
@@ -223,6 +224,60 @@ static char g_guest_stdout_capture[256] = {};
 static size_t g_guest_stdout_capture_size = 0;
 static bool g_guest_stdout_capture_enabled = false;
 
+struct FEXLinuxSyscallContext {
+    FEXCore::Core::CpuStateFrame *Frame;
+};
+
+static int64_t fex_linux_write(void *, uint64_t fd_raw, uint64_t buf_raw, uint64_t count_raw) {
+    const int fd = static_cast<int>(fd_raw);
+    const char *buf = reinterpret_cast<const char *>(buf_raw);
+    const size_t count = static_cast<size_t>(count_raw);
+
+    if (fd != 1 && fd != 2) return -STEAMOS_LINUX_EBADF;
+
+    if (fd == 1 && g_guest_stdout_capture_enabled) {
+        const size_t available = sizeof(g_guest_stdout_capture) - g_guest_stdout_capture_size;
+        const size_t copy_size = count < available ? count : available;
+        if (copy_size) {
+            memcpy(g_guest_stdout_capture + g_guest_stdout_capture_size, buf, copy_size);
+            g_guest_stdout_capture_size += copy_size;
+        }
+    }
+    fex_log("[x86 write fd=%d] %.*s", fd, (int)count, buf);
+    return static_cast<int64_t>(count);
+}
+
+static void fex_linux_exit(void *opaque, int64_t status, int is_group_exit) {
+    auto *ctx = static_cast<FEXLinuxSyscallContext *>(opaque);
+    fex_log("[x86] %s(%lld)", is_group_exit ? "exit_group" : "exit", (long long)status);
+    g_exit_code = status;
+
+    if (g_exit_jmp_set) {
+        fex_log("[x86] Escaping via longjmp (exit code %lld)", g_exit_code);
+        longjmp(g_exit_jmp, 1);
+    }
+
+    fex_log("[x86] WARNING: longjmp not set, trying InterruptFaultPage fallback");
+    if (ctx && ctx->Frame && ctx->Frame->Thread) {
+        auto *Thread = ctx->Frame->Thread;
+        ::mprotect(&Thread->InterruptFaultPage, sizeof(Thread->InterruptFaultPage), PROT_NONE);
+    }
+}
+
+static void fex_linux_missing(void *, uint64_t number, const uint64_t args[6]) {
+    fex_log("[linux-syscall-missing] number=%llu a0=0x%llx a1=0x%llx a2=0x%llx",
+            (unsigned long long)number,
+            (unsigned long long)args[0],
+            (unsigned long long)args[1],
+            (unsigned long long)args[2]);
+}
+
+static const steamos_linux_syscall_ops g_linux_syscall_ops = {
+    fex_linux_write,
+    fex_linux_exit,
+    fex_linux_missing,
+};
+
 // ---------------------------------------------------------------------------
 // Minimal SyscallHandler for FEXCore
 // Handles basic syscalls so FEXCore can initialize and run trivial x86 code
@@ -237,59 +292,14 @@ public:
 
     uint64_t HandleSyscall(FEXCore::Core::CpuStateFrame *Frame, FEXCore::HLE::SyscallArguments *Args) override {
         syscall_count.fetch_add(1);
-        // Args[0] = RAX (syscall number), Args[1] = RDI, Args[2] = RSI, Args[3] = RDX, ...
-        uint64_t SyscallNum = Args->Argument[0];
-
-        switch (SyscallNum) {
-        case 1: { // sys_write(fd, buf, count)
-            // Args layout: [0]=RAX (syscall num), [1]=RDI (fd), [2]=RSI (buf), [3]=RDX (count)
-            int fd = static_cast<int>(Args->Argument[1]);
-            auto buf = reinterpret_cast<const char*>(Args->Argument[2]);
-            size_t count = Args->Argument[3];
-
-            // NOTE: On non-Windows, syscall does NOT have FLAGS_BLOCK_END.
-            // The JIT-compiled block continues past the syscall instruction.
-            // Do NOT modify Frame->State.rip here — the JIT handles continuation.
-
-            if (fd == 1 || fd == 2) {
-                // stdout/stderr
-                if (fd == 1 && g_guest_stdout_capture_enabled) {
-                    const size_t available = sizeof(g_guest_stdout_capture) - g_guest_stdout_capture_size;
-                    const size_t copy_size = count < available ? count : available;
-                    if (copy_size) {
-                        memcpy(g_guest_stdout_capture + g_guest_stdout_capture_size, buf, copy_size);
-                        g_guest_stdout_capture_size += copy_size;
-                    }
-                }
-                fex_log("[x86 write fd=%d] %.*s", fd, (int)count, buf);
-                return count;
-            }
-            return -1; // EPERM
-        }
-        case 60: // sys_exit
-        case 231: { // sys_exit_group
-            // Args layout: [0]=RAX (syscall num), [1]=RDI (arg0), [2]=RSI, ...
-            fex_log("[x86] exit(%llu) via syscall %llu", Args->Argument[1], SyscallNum);
-            g_exit_code = static_cast<int64_t>(Args->Argument[1]);
-
-            if (g_exit_jmp_set) {
-                fex_log("[x86] Escaping via longjmp (exit code %lld)", g_exit_code);
-                longjmp(g_exit_jmp, 1);
-                // Does not return
-            }
-
-            // Fallback: try InterruptFaultPage (won't work with debugger attached)
-            fex_log("[x86] WARNING: longjmp not set, trying InterruptFaultPage fallback");
-            auto *Thread = Frame->Thread;
-            ::mprotect(&Thread->InterruptFaultPage, sizeof(Thread->InterruptFaultPage), PROT_NONE);
-            return 0;
-        }
-        default:
-            fex_log("[x86] Unhandled syscall %llu", SyscallNum);
-            // Do NOT modify rip — syscall is non-block-ending on non-Windows,
-            // so the JIT continues past it inline.
-            return -38; // ENOSYS
-        }
+        const uint64_t linux_args[6] = {
+            Args->Argument[1], Args->Argument[2], Args->Argument[3],
+            Args->Argument[4], Args->Argument[5], Args->Argument[6],
+        };
+        FEXLinuxSyscallContext context{Frame};
+        return static_cast<uint64_t>(
+            steamos_linux_dispatch_syscall(Args->Argument[0], linux_args,
+                                           &g_linux_syscall_ops, &context));
     }
 
     FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(
