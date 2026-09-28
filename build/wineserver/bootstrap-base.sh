@@ -76,17 +76,19 @@ for name in "${BASE_SOURCES[@]}"; do
 done
 
 ar rcs "$OUT_LIB" "$BASE_OBJ"/*.o
-member_count="$(ar -t "$OUT_LIB" | grep -E '\\.o
+
+archive_members="$(ar -t "$OUT_LIB")"
+member_count="$(printf '%s\n' "$archive_members" | awk '/\.o$/ { count++ } END { print count + 0 }')"
 [[ "$member_count" -eq "${#BASE_SOURCES[@]}" ]] || {
-    echo "error: base archive member mismatch: got $member_count expected ${#BASE_SOURCES[@]}" >&2
+    echo "error: base archive object mismatch: got $member_count expected ${#BASE_SOURCES[@]}" >&2
+    printf '%s\n' "$archive_members" >&2
     exit 1
 }
+for name in "${BASE_SOURCES[@]}"; do
+    if ! printf '%s\n' "$archive_members" | grep -Fxq "$name.o"; then
+        echo "error: base archive missing $name.o" >&2
+        exit 1
+    fi
+done
 
-echo "WINESERVER_BASE_OK members=$member_count archive=$OUT_LIB"
- | wc -l | tr -d ' ')"
-[[ "$member_count" -eq "${#BASE_SOURCES[@]}" ]] || {
-    echo "error: base archive member mismatch: got $member_count expected ${#BASE_SOURCES[@]}" >&2
-    exit 1
-}
-
-echo "WINESERVER_BASE_OK members=$member_count archive=$OUT_LIB"
+echo "WINESERVER_BASE_OK objects=$member_count archive=$OUT_LIB"
