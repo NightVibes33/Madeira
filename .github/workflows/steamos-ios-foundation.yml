@@ -27,6 +27,9 @@ jobs:
       - name: Run deterministic ELF64 parser/fixture tests
         run: bash tests/elf/run.sh
 
+      - name: Run deterministic Linux syscall dispatcher tests
+        run: bash tests/linux-syscalls/run.sh
+
       - name: Verify committed L0 fixture is generated, not hand-edited
         run: |
           tmp="$(mktemp -d)"
