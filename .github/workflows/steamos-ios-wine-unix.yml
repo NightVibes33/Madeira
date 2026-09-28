@@ -11,7 +11,7 @@ on:
       - "build/crypto-unix/**"
       - "build/gnutls-ios/**"
       - "build/freetype-ios/**"
-      - "tools/runtime-deps/**"
+      - "tools/runtime-deps/fetch-freetype.sh"
   workflow_dispatch:
 
 permissions:
