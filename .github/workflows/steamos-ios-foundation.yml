@@ -66,3 +66,35 @@ jobs:
           grep -F '#include "steamos_ios_static_smoke.h"' app/Madeira/FEXBridge.mm
           grep -F 'STEAMOS_IOS_L0_PASS' app/Madeira/FEXBridge.mm
           grep -F 'steamos_ios_static_smoke_elf' app/Madeira/FEXBridge.mm
+
+  wineserver-clean:
+    name: clean-clone wineserver archive
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned Wine only
+        run: git submodule update --init --depth 1 wine
+
+      - name: Install host build tools
+        run: brew install bison llvm
+
+      - name: Build pristine iOS wineserver base
+        run: |
+          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/llvm/bin:$PATH"
+          bash build/wineserver/bootstrap-base.sh
+
+      - name: Apply Madeira wineserver replacements
+        run: |
+          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/llvm/bin:$PATH"
+          bash build/wineserver/build.sh all
+
+      - name: Verify staged archive
+        run: |
+          test -s app/Madeira/libwineserver.a
+          file app/Madeira/libwineserver.a
+          count="$(ar -t app/Madeira/libwineserver.a | wc -l | tr -d ' ')"
+          test "$count" -ge 40
+          echo "WINESERVER_CLEAN_BUILD_OK members=$count"
