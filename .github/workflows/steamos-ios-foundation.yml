@@ -70,6 +70,8 @@ jobs:
           grep -F '#include "steamos_ios_static_smoke.h"' app/Madeira/FEXBridge.mm
           grep -F 'STEAMOS_IOS_L0_PASS' app/Madeira/FEXBridge.mm
           grep -F 'steamos_ios_static_smoke_elf' app/Madeira/FEXBridge.mm
+          grep -F 'case 0:' app/Madeira/ContentView.swift
+          grep -F 'STEAMOS_IOS_L0_PASS: x86-64 Linux ELF wrote STEAMOS_IOS_ELF_OK and exited 0' app/Madeira/ContentView.swift
 
   wineserver-clean:
     name: clean-clone wineserver archive

@@ -1779,12 +1779,15 @@ struct ContentView: View {
 
             DispatchQueue.main.async {
                 switch result {
-                case 42:
+                case 0:
                     jitStatus = .available
-                    logStore.log("FEX-Emu test PASSED: x86-64 code returned 42!", level: .success)
+                    logStore.log("STEAMOS_IOS_L0_PASS: x86-64 Linux ELF wrote STEAMOS_IOS_ELF_OK and exited 0", level: .success)
                 case -1:
                     jitStatus = .unavailable
                     logStore.log("FEX-Emu test FAILED (init/setup error)", level: .error)
+                case -2:
+                    jitStatus = .unavailable
+                    logStore.log("SteamOS-iOS L0 FAILED: guest stdout discriminator mismatch", level: .error)
                 default:
                     jitStatus = .unavailable
                     logStore.log("FEX-Emu test returned \(result)", level: .error)
