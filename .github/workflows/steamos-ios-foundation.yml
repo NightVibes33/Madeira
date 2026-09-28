@@ -72,6 +72,9 @@ jobs:
       - name: Verify SteamOS-iOS FEX discriminator is wired
         run: |
           grep -F '#include "steamos_ios_static_smoke.h"' app/Madeira/FEXBridge.mm
+          grep -F '#include "../../runtime/linux/elf/elf64_image.h"' app/Madeira/FEXBridge.mm
+          grep -F 'steamos_elf64_parse' app/Madeira/FEXBridge.mm
+          grep -F 'elf64_image.c in Sources' app/Madeira.xcodeproj/project.pbxproj
           grep -F 'STEAMOS_IOS_L0_PASS' app/Madeira/FEXBridge.mm
           grep -F 'steamos_ios_static_smoke_elf' app/Madeira/FEXBridge.mm
           grep -F 'case 0:' app/Madeira/ContentView.swift

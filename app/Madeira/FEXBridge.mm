@@ -642,6 +642,9 @@ int64_t fex_test_execute(void) {
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (stack_mem == MAP_FAILED) {
         fex_log("FAIL: Could not allocate guest stack");
+        for (int i = 0; i < num_mapped; ++i) {
+            ::munmap(mapped_regions[i].addr, mapped_regions[i].size);
+        }
         running.store(false);
         return -1;
     }
