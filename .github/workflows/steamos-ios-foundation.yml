@@ -85,16 +85,19 @@ jobs:
         run: git submodule update --init --depth 1 wine
 
       - name: Install host build tools
-        run: brew install bison llvm
+        run: brew install bison
+
+      - name: Fetch pinned llvm-mingw
+        run: bash tools/bootstrap/fetch-llvm-mingw.sh
 
       - name: Build pristine iOS wineserver base
         run: |
-          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/llvm/bin:$PATH"
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/wineserver/bootstrap-base.sh
 
       - name: Apply Madeira wineserver replacements
         run: |
-          export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/llvm/bin:$PATH"
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/wineserver/build.sh all
 
       - name: Verify staged archive
