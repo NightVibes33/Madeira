@@ -1,0 +1,66 @@
+name: SteamOS-iOS foundation gates
+
+on:
+  push:
+    branches: [steamos-ios]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    name: Pins + ELF L0 host gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Verify frozen Madeira ancestry and submodule pins
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Run deterministic ELF64 parser/fixture tests
+        run: bash tests/elf/run.sh
+
+      - name: Verify committed L0 fixture is generated, not hand-edited
+        run: |
+          tmp="$(mktemp -d)"
+          python3 tests/elf/gen_static_smoke.py --elf "$tmp/smoke.elf" --header "$tmp/smoke.h"
+          cmp "$tmp/smoke.h" app/Madeira/steamos_ios_static_smoke.h
+          grep -aF 'STEAMOS_IOS_ELF_OK' "$tmp/smoke.elf"
+
+      - name: Reject VM/full-system dependencies in new Linux personality
+        run: |
+          if grep -RniE 'qemu-system|utm[[:space:]]+vm|full-system[[:space:]]+emulat' runtime/linux tests/elf tests/linux-syscalls; then
+            echo "Forbidden full-system dependency found in SteamOS-iOS Linux personality" >&2
+            exit 1
+          fi
+
+  macos-source:
+    name: macOS/Xcode source gate
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Toolchain identity
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          clang --version
+
+      - name: Verify project enumerates
+        run: xcodebuild -project app/Madeira.xcodeproj -list
+
+      - name: Re-run L0 parser with Apple clang
+        run: bash tests/elf/run.sh
+
+      - name: Verify SteamOS-iOS FEX discriminator is wired
+        run: |
+          grep -F '#include "steamos_ios_static_smoke.h"' app/Madeira/FEXBridge.mm
+          grep -F 'STEAMOS_IOS_L0_PASS' app/Madeira/FEXBridge.mm
+          grep -F 'steamos_ios_static_smoke_elf' app/Madeira/FEXBridge.mm
