@@ -7,7 +7,7 @@ on:
       - ".github/workflows/steamos-ios-runtime-deps.yml"
       - "build/gnutls-ios/**"
       - "build/freetype-ios/**"
-      - "tools/runtime-deps/**"
+      - "tools/runtime-deps/fetch-freetype.sh"
       - "docs/STEAMOS_IOS_BASELINE.md"
   workflow_dispatch:
 
