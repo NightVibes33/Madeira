@@ -1,0 +1,144 @@
+name: Build SteamOS-iOS iOS baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'build/**'
+      - 'runtime/**'
+      - 'tests/**'
+      - 'tools/bootstrap/**'
+      - 'tools/packaging/**'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    name: Clean macOS -> unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Verify foundation pins
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install cmake ninja meson pkg-config bison flex ccache llvm autoconf automake xz
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain identity
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          clang --version
+          uname -a
+
+      - name: Cache reconstructed iOS LLVM
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/llvm-project
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: steamos-ios-llvm-8dfdcc7b7bf66834a761bd8de445840ef68e4d1a-\${{ runner.os }}-\${{ runner.arch }}-xcode-\${{ hashFiles('/Applications/Xcode.app/Contents/version.plist') }}
+
+      - name: Fetch pinned external toolchains/sources
+        run: |
+          bash tools/bootstrap/fetch-llvm-mingw.sh
+          bash tools/bootstrap/fetch-freetype.sh
+
+      - name: Build pinned LLVM for iOS
+        run: bash tools/bootstrap/build-llvm-ios.sh
+
+      - name: Generate Wine host build metadata/tools
+        run: bash build/wine-unix/bootstrap-generated.sh
+
+      - name: Build FEX iOS static libraries
+        run: bash build/fex-ios/build.sh
+
+      - name: Build FreeType iOS
+        run: bash build/freetype-ios/build.sh
+
+      - name: Build Wine iOS unix side
+        run: |
+          bash build/ntdll-unix/build.sh
+          bash build/wineserver/build.sh
+          bash build/win32u-unix/build.sh
+
+      - name: Build DXMT iOS combined archive
+        run: bash build/dxmt-ios/build.sh
+
+      - name: Stage legal notices
+        run: bash build/stage-licenses.sh
+
+      - name: Run SteamOS-iOS ELF host gate
+        run: bash tests/elf/run.sh
+
+      - name: Prepare intentionally external VC runtime resource directory
+        run: mkdir -p app/Madeira/x86_64-vcruntime
+
+      - name: Build unsigned iOS app
+        run: |
+          rm -rf DerivedData
+          xcodebuild \
+            -project app/Madeira.xcodeproj \
+            -scheme Madeira \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            build | tee xcodebuild.log
+
+      - name: Package and verify IPA structure
+        run: |
+          APP="DerivedData/Build/Products/Debug-iphoneos/Madeira.app"
+          test -d "$APP"
+          mkdir -p artifacts
+          bash tools/packaging/package-ipa.sh "$APP" "$PWD/artifacts/SteamOS-iOS-baseline.ipa" "$PWD/artifacts/SteamOS-iOS-baseline.ipa.sha256"
+
+      - name: Write build manifest
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          def rev(path='.'):
+              return subprocess.check_output(['git','-C',path,'rev-parse','HEAD'], text=True).strip()
+          def cmd(*args):
+              return subprocess.check_output(args, text=True).strip()
+          info = {
+              'commit': rev(),
+              'madeira_baseline': '9e8291eb42519b35b3d40b5f915c3a5f6d4fff45',
+              'fex': rev('FEX'),
+              'wine': rev('wine'),
+              'dxmt': rev('research/dxmt'),
+              'rpmalloc': rev('FEX/External/rpmalloc'),
+              'llvm': '8dfdcc7b7bf66834a761bd8de445840ef68e4d1a',
+              'xcode': cmd('xcodebuild','-version').replace('\n','; '),
+              'sdk': cmd('xcrun','--sdk','iphoneos','--show-sdk-version'),
+          }
+          pathlib.Path('artifacts/build-info.json').write_text(json.dumps(info, indent=2) + '\n')
+          PY
+          git submodule status --recursive > artifacts/dependency-manifest.txt
+          cp xcodebuild.log artifacts/xcodebuild.log
+
+      - name: Upload build products
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamOS-iOS-baseline-\${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
