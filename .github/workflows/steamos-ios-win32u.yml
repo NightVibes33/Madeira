@@ -34,11 +34,14 @@ jobs:
       - name: Install host build tools
         run: brew install bison
 
+      - name: Fetch pinned llvm-mingw
+        run: bash tools/bootstrap/fetch-llvm-mingw.sh
+
       - name: Configure Wine host headers
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           mkdir -p wine/build-macos
           (
             cd wine/build-macos
