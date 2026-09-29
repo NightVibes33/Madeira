@@ -11,6 +11,7 @@ on:
       - "research/madeira-d3d12/**"
       - "build/llvm-ios/**"
       - "tools/runtime-deps/fetch-llvm-project.sh"
+      - "tools/patches/apply-dxmt-ios-xcode27.py"
   workflow_dispatch:
 
 permissions:

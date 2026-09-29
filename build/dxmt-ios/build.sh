@@ -15,6 +15,7 @@ SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 OUT_LIB="$BUILD_DIR/libdxmt_unix.a"
 
+python3 "$REPO_ROOT/tools/patches/apply-dxmt-ios-xcode27.py" "$DXMT_ROOT"
 mkdir -p "$OBJ_DIR"
 
 COMMON_FLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=18.0 -fblocks -O2"
