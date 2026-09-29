@@ -53,5 +53,33 @@ if count != 1:
         f"expected one exact block, found {count}"
     )
 
-path.write_text(text.replace(old, new, 1))
+text = text.replace(old, new, 1)
+
+allocator_bad = """#else
+void InitializeThread() {}
+
+void* malloc(size_t size) {
+  return ::malloc(size);
+}"""
+if allocator_bad not in text:
+    raise SystemExit("error: pinned FEX allocator-disabled branch anchor drifted")
+
+guard_bad = """size_t malloc_usable_size(void* ptr) {
+  IOS_RPM_GUARD();
+#ifdef __APPLE__
+  return ::malloc_size(ptr);"""
+guard_good = """size_t malloc_usable_size(void* ptr) {
+#ifdef __APPLE__
+  return ::malloc_size(ptr);"""
+
+if guard_good not in text:
+    count = text.count(guard_bad)
+    if count != 1:
+        raise SystemExit(
+            f"error: pinned FEX allocator-disabled IOS_RPM_GUARD drift: "
+            f"expected one exact block, found {count}"
+        )
+    text = text.replace(guard_bad, guard_good, 1)
+
+path.write_text(text)
 print(f"FEX_IOS_PATCH_OK applied={path}")
