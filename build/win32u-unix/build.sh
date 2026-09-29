@@ -8,6 +8,16 @@
 # those code paths fall back to stubs.
 set -e
 
+# Wine's WIDL grammar uses modern Bison directives (%code, etc.). Apple's
+# system bison is too old; hosted Xcode runners install current Bison keg-only.
+if [ -x /opt/homebrew/opt/bison/bin/bison ]; then
+    export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+fi
+if ! bison --version | head -1 | grep -Eq '([3-9]\.|[1-9][0-9]+\.)'; then
+    echo "error: Wine header generation requires Bison 3+" >&2
+    exit 1
+fi
+
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
