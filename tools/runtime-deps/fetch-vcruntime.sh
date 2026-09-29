@@ -29,51 +29,84 @@ if [ "$actual" != "$SHA256" ]; then
 fi
 echo "VCRUNTIME_INSTALLER_PIN_OK version=$VERSION sha256=$SHA256"
 
-mkdir -p "$TREE/exe"
-7zz x -y -tPE "$EXE" "-o$TREE/exe" >/dev/null
+mkdir -p "$TREE/containers" "$TREE/extracted"
 
-# 7-Zip exposes Burn's embedded cabinets as PE resources. Newer installers do
-# not consistently preserve a .cab suffix there, so extract every resource
-# beneath a CABINET directory regardless of its filename.
-cab_resource_count=0
-resource_index=0
-while IFS= read -r -d '' a; do
-  resource_index=$((resource_index + 1))
-  dest="$TREE/pe-resource-$resource_index"
-  mkdir -p "$dest"
-  if 7zz x -y "$a" "-o$dest" >/dev/null 2>&1; then
-    cab_resource_count=$((cab_resource_count + 1))
-  else
-    rmdir "$dest" 2>/dev/null || true
-  fi
-done < <(find "$TREE/exe/.rsrc" -type f -print0 2>/dev/null || true)
-echo "VCRUNTIME_ARCHIVE_RESOURCES extracted=$cab_resource_count scanned=$resource_index"
-if [ "$cab_resource_count" -eq 0 ]; then
-  echo "=== VC_redist 7-Zip listing (diagnostic) ===" >&2
-  7zz l "$EXE" 2>&1 | sed -n '1,260p' >&2 || true
-  echo "=== first extracted files ===" >&2
-  find "$TREE/exe" -type f -print | sed -n '1,260p' >&2 || true
-fi
+# WiX Burn is a PE followed by cabinet streams. Carve every valid CAB by its
+# MSCF header instead of relying on an archive tool to expose the attached
+# container.
+python3 - "$EXE" "$TREE/containers" <<'PY'
+from __future__ import annotations
+import pathlib, struct, sys
 
-# Current Microsoft Burn packages expose one or more CAB/MSI payloads. Extract
-# every archive recursively into separate directories, then select only
-# unmodified AMD64 PE DLLs by exact basename. Wrong-arch ARM64 payloads in the
-# x64 redistributable are deliberately ignored.
-round=0
-while [ "$round" -lt 3 ]; do
-  round=$((round + 1))
-  found=0
-  while IFS= read -r -d '' a; do
-    marker="$a.madeira-extracted"
-    [ -e "$marker" ] && continue
-    found=1
-    touch "$marker"
-    dest="$TREE/nested-$round-$(printf '%s' "$a" | shasum | cut -c1-16)"
-    mkdir -p "$dest"
-    7zz x -y "$a" "-o$dest" >/dev/null 2>&1 || true
-  done < <(find "$TREE" -type f \( -iname '*.cab' -o -iname '*.msi' \) -print0)
-  [ "$found" -eq 0 ] && break
-done
+src = pathlib.Path(sys.argv[1])
+out = pathlib.Path(sys.argv[2])
+blob = src.read_bytes()
+magic = b"MSCF\0\0\0\0"
+offset = 0
+count = 0
+
+while True:
+    offset = blob.find(magic, offset)
+    if offset < 0:
+        break
+    if offset + 36 <= len(blob):
+        size = struct.unpack_from("<I", blob, offset + 8)[0]
+        if 36 <= size <= len(blob) - offset:
+            path = out / f"container-{count:02d}-{offset:08x}.cab"
+            path.write_bytes(blob[offset:offset + size])
+            print(f"VCRUNTIME_CAB_CARVED index={count} offset={offset} size={size}")
+            count += 1
+    offset += 8
+
+if count < 2:
+    raise SystemExit(f"expected at least two Burn cabinets, found {count}")
+print(f"VCRUNTIME_CAB_CARVE_OK count={count}")
+PY
+
+# Extract each carved cabinet and recursively unpack any nested CAB payloads.
+python3 - "$TREE/containers" "$TREE/extracted" "$(command -v 7zz)" <<'PY'
+from __future__ import annotations
+import hashlib, pathlib, subprocess, sys
+
+containers = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+seven = sys.argv[3]
+queue = sorted(containers.glob("*.cab"))
+seen = set()
+index = 0
+
+while index < len(queue):
+    if len(queue) > 64:
+        raise SystemExit("unexpected VC runtime cabinet nesting (>64)")
+    cab = queue[index]
+    data = cab.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest in seen:
+        index += 1
+        continue
+    seen.add(digest)
+
+    dest = root / f"cab-{index:02d}"
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run([seven, "x", "-y", str(cab), f"-o{dest}"],
+                   check=True, stdout=subprocess.DEVNULL)
+
+    for p in sorted(dest.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        if data[:4] != b"MSCF":
+            continue
+        nested = root / f"nested-{len(queue):02d}.cab"
+        nested.write_bytes(data)
+        queue.append(nested)
+    index += 1
+
+print(f"VCRUNTIME_CAB_EXTRACT_OK unique={len(seen)} queued={len(queue)}")
+PY
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
