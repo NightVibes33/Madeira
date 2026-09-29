@@ -1,2 +1,2 @@
-trigger=steamios-clear-cache-signature-fix-20260929
-purpose=clean-ipa-after-correct-clang-builtin-signature
+trigger=steamios-bundle-icon-jit-safe-placement-20260929
+purpose=clean-ipa-after-bundle-id-icon-current-stikdebug-and-fixed-rx-pool

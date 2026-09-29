@@ -2324,13 +2324,12 @@ struct ContentView: View {
                 // executing with no JIT pool, and it cost a diagnostic cycle plus a
                 // wrong conclusion I wrote into the source. A run without the pool can
                 // only manufacture misleading secondary crashes, so refuse to start one.
-                logStore.log("JIT pool allocation FAILED — not starting Wine.", level: .error)
-                logStore.log("  All placements landed in the forbidden guest 64G window.", level: .info)
-                logStore.log("  Force-quit and relaunch: placement is chosen by the kernel", level: .info)
-                logStore.log("  and depends on current memory layout, so a fresh process", level: .info)
-                logStore.log("  usually lands somewhere valid.", level: .info)
+                logStore.log("JIT pool setup FAILED — not starting Wine.", level: .error)
+                logStore.log("  JIT attachment succeeded, but no safe RX pool could be prepared.", level: .info)
+                logStore.log("  SteamIOS now tries the constructor-reserved exact region first,", level: .info)
+                logStore.log("  then a measured fixed hole, then legacy StikDebug first-fit.", level: .info)
                 DispatchQueue.main.async {
-                    self.productState = .failed("Executable JIT memory pool allocation failed. Force-quit and retry.")
+                    self.productState = .failed("Executable JIT pool setup failed after JIT attached. Check the JIT log and retry.")
                 }
                 logStore.uiPaused = false
                 return

@@ -129,6 +129,25 @@ i386_count="$(find app/Madeira/i386-windows -maxdepth 1 -type f ! -name '.gitkee
 }
 echo "STEAMOS_IOS_WOW64_PAYLOAD_OK files=$i386_count"
 
+# Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
+# Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
+ICON_SOURCE="$R/build/steamos-ios/assets/SteamIOS-AppIcon-source.jpeg"
+ICON_DEST="$R/app/Madeira/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+ICON_SHA256="ccbbe73a8f06d5b5cd605adf313d8cafa7de7b544eed7f3ca1fd4334953dcea4"
+test -s "$ICON_SOURCE" || { echo "error: missing SteamIOS app icon source" >&2; exit 1; }
+actual_icon_sha="$(shasum -a 256 "$ICON_SOURCE" | awk '{print $1}')"
+[ "$actual_icon_sha" = "$ICON_SHA256" ] || {
+  echo "error: SteamIOS app icon source checksum mismatch" >&2
+  exit 1
+}
+mkdir -p "$(dirname "$ICON_DEST")"
+/usr/bin/sips -s format png -z 1024 1024 "$ICON_SOURCE" --out "$ICON_DEST" >/dev/null
+test -s "$ICON_DEST" || { echo "error: failed to materialize AppIcon-1024.png" >&2; exit 1; }
+icon_dims="$(/usr/bin/sips -g pixelWidth -g pixelHeight "$ICON_DEST" 2>/dev/null)"
+printf '%s\n' "$icon_dims" | grep -q 'pixelWidth: 1024'
+printf '%s\n' "$icon_dims" | grep -q 'pixelHeight: 1024'
+echo "STEAMIOS_APP_ICON_OK sha256=$actual_icon_sha"
+
 rm -rf "$DERIVED"
 mkdir -p "$ARTIFACTS"
 

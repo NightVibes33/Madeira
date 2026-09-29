@@ -30,7 +30,7 @@ enum StikJITHelper {
     /// Open StikDebug with our JIT script embedded in the URL.
     /// StikDebug will attach to our process and run the script.
     static func enableJIT(completion: @escaping (Bool) -> Void) {
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.madeira.emulator"
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.nightvibes33.steamios"
 
         // Build the URL with script data
         let scriptData = resolvedScriptBase64.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
@@ -273,24 +273,88 @@ enum StikJITHelper {
         // ml1040: the run directly above the window has been held since image load
         // so that nothing of ours could land in it. Release it now -- the very
         // next allocation of this size is the debugger's.
-        var plugs: [(vm_address_t, vm_size_t)] = []
+        // SteamIOS: prefer an exact low RX mapping that we reserved before SwiftUI
+        // starts. StikDebug's _M<size>,rx allocator is first-fit and can repeatedly
+        // choose the forbidden x86-64 guest window even though JIT is enabled.
+        // Passing a NONZERO x0 to CMD_PREPARE_REGION tells the StikDebug script to
+        // prepare that exact mapping instead of allocating a new first-fit region.
+        var rxPtrOpt: UnsafeMutableRawPointer? = nil
         let earlyPoolBase = vm_address_t(madeira_early_pool_base)
         let earlyPoolSize = vm_address_t(madeira_early_pool_size)
-        if earlyPoolBase != 0 {
-            vm_deallocate(mach_task_self_, earlyPoolBase, vm_size_t(earlyPoolSize))
-            LogStore.shared.log(String(format: "ml1040: released the early pool placeholder 0x%lx+%luMB for the debugger",
-                                       Int(earlyPoolBase), Int(earlyPoolSize >> 20)))
-        } else {
-            LogStore.shared.log("ml1040: no early pool placeholder was obtained — placement is left to chance", level: .error)
-            // ml1135: what was already mapped above the window at image load (user_tag
-            // is the VM_MEMORY_* allocation tag; 0 = untagged anonymous memory).
+        let poolGranularity = 16 << 20
+
+        func prepareExactPool(_ base: vm_address_t, _ size: Int, label: String) -> UnsafeMutableRawPointer? {
+            guard base >= vm_address_t(goodLow),
+                  base + vm_address_t(size) <= vm_address_t(guestLo),
+                  !overlapsExeWindow(base, vm_address_t(size)),
+                  let candidate = UnsafeMutableRawPointer(bitPattern: Int(base)) else {
+                LogStore.shared.log("\(label): rejected unsafe RX candidate", level: .error)
+                return nil
+            }
+
+            // vm_allocate placeholders start RW-capable with current protection
+            // changed to NONE. Restore write access while StikDebug prepares the
+            // mapping, then lock the executable view back to RX.
+            let rwKr = vm_protect(mach_task_self_, base, vm_size_t(size), 0, VM_PROT_READ | VM_PROT_WRITE)
+            guard rwKr == KERN_SUCCESS else {
+                LogStore.shared.log("\(label): vm_protect(RW) failed kr=\(rwKr)", level: .error)
+                return nil
+            }
+
+            guard let prepared = jit26_prepare_region(candidate, size), prepared == candidate else {
+                LogStore.shared.log("\(label): StikDebug refused exact region at "
+                    + String(format: "0x%lx", Int(base)), level: .error)
+                return nil
+            }
+
+            let rxKr = vm_protect(mach_task_self_, base, vm_size_t(size), 0, VM_PROT_READ | VM_PROT_EXECUTE)
+            guard rxKr == KERN_SUCCESS else {
+                LogStore.shared.log("\(label): vm_protect(RX) failed kr=\(rxKr)", level: .error)
+                return nil
+            }
+
+            LogStore.shared.log(String(format: "%@: exact StikDebug RX pool prepared at 0x%lx+%luMB",
+                                       label, Int(base), Int(size >> 20)), level: .success)
+            return candidate
+        }
+
+        // Fast deterministic path: the C constructor claimed this VA before
+        // Swift/Metal/malloc could fragment it. Keep the mapping in place and
+        // have StikDebug bless it in situ; do NOT release it and ask first-fit
+        // to find it again.
+        if earlyPoolBase != 0 && earlyPoolSize >= vm_address_t(256 << 20) {
+            let available = Int(earlyPoolSize) & ~(poolGranularity - 1)
+            if available < poolSize {
+                LogStore.shared.log("Reserved startup pool is \(available >> 20)MB; shrinking requested "
+                    + "\(poolSize >> 20)MB pool to the deterministic reservation.", level: .info)
+                poolSize = available
+            }
+
+            if poolSize >= 256 << 20 {
+                rxPtrOpt = prepareExactPool(earlyPoolBase, poolSize, label: "startup-reservation")
+                if rxPtrOpt != nil && earlyPoolSize > vm_address_t(poolSize) {
+                    let tailBase = earlyPoolBase + vm_address_t(poolSize)
+                    let tailSize = earlyPoolSize - vm_address_t(poolSize)
+                    _ = vm_deallocate(mach_task_self_, tailBase, vm_size_t(tailSize))
+                }
+            }
+
+            if rxPtrOpt == nil {
+                // Restore old fallback semantics only after the deterministic path
+                // has genuinely failed.
+                _ = vm_deallocate(mach_task_self_, earlyPoolBase, vm_size_t(earlyPoolSize))
+                LogStore.shared.log("Exact startup reservation failed; falling back to measured free holes.", level: .error)
+            }
+        } else if earlyPoolBase == 0 {
+            LogStore.shared.log("No early JIT placeholder was obtained; scanning for a safe exact hole.", level: .error)
             if madeira_early_intruder_base != 0 {
-                LogStore.shared.log(String(format: "ml1135: the placeholder was blocked at image load by a mapping at 0x%lx+%luMB (VM tag %u, prot %u) -- this is what shrinks the JIT pool",
+                LogStore.shared.log(String(format: "Early pool blocked by mapping 0x%lx+%luMB (VM tag %u prot %u)",
                                            Int(madeira_early_intruder_base), Int(madeira_early_intruder_size >> 20),
                                            madeira_early_intruder_tag, madeira_early_intruder_prot), level: .error)
             }
         }
-        do {
+
+        if rxPtrOpt == nil {
             var holes: [(base: vm_address_t, size: vm_address_t)] = []
             var addr = vm_address_t(goodLow)
             var prevEnd = vm_address_t(goodLow)
@@ -305,88 +369,79 @@ enum StikJITHelper {
                     }
                 }
                 if kr != KERN_SUCCESS { break }
-                let start = min(addr, vm_address_t(guestLo))
-                if start > prevEnd && start - prevEnd >= 64 << 20 { holes.append((prevEnd, start - prevEnd)) }
+                let regionStart = min(addr, vm_address_t(guestLo))
+                if regionStart > prevEnd && regionStart - prevEnd >= 64 << 20 {
+                    holes.append((prevEnd, regionStart - prevEnd))
+                }
                 prevEnd = max(prevEnd, addr + vm_address_t(rsize))
                 addr = prevEnd
             }
+
             let desc = holes.map { String(format: "0x%lx+%luMB", Int($0.base), Int($0.size >> 20)) }.joined(separator: " ")
-            LogStore.shared.log("ml1036: free holes >=64MB in [0x119000000,0x7000000000) with the window held: "
-                + (desc.isEmpty ? "NONE" : desc))
+            LogStore.shared.log("Safe JIT holes: " + (desc.isEmpty ? "NONE" : desc))
+
             let largest = holes.map { $0.size }.max() ?? 0
             if largest < vm_address_t(poolSize) {
-                let fit = Int(largest) & ~((16 << 20) - 1)
+                let fit = Int(largest) & ~(poolGranularity - 1)
                 if fit >= 256 << 20 {
-                    LogStore.shared.log("ml1036: no hole fits a \(poolSize >> 20)MB pool — SHRINKING to \(fit >> 20)MB "
-                        + "(the alternative is a pool in the guest window or on top of 0x140000000, "
-                        + "both of which are fatal)", level: .error)
+                    LogStore.shared.log("No hole fits \(poolSize >> 20)MB; shrinking JIT pool to \(fit >> 20)MB.", level: .info)
                     poolSize = fit
-                    // ml1135: ~400MB of the pool is PE image copies, so below ~500MB FEX's
-                    // code cache is starved and rolls over every few seconds in game
-                    // (ph-rdr90: 432MB pool, 52 rollovers, a ~1 s freeze each).
-                    if fit < 500 << 20 {
-                        LogStore.shared.log("⚠️ SMALL JIT POOL (\(fit >> 20)MB) on this launch: expect ~1 s freezes in heavy games. "
-                            + "Quit and relaunch the app for a smooth session.", level: .error)
-                    }
-                } else {
-                    LogStore.shared.log("ml1036: largest hole is only \(largest >> 20)MB — cannot place a usable pool",
-                                        level: .error)
                 }
             }
-            // ml1040: the debugger allocates first-fit. If a LOWER hole also fits
-            // the final pool size it would win and strand the pool below the
-            // window again, so plug those for the duration of the request.
-            // ml1097: a hole that CONTAINS or ADJOINS the released placeholder is the
-            // pool's own landing site, never a "lower hole" -- when the window was not
-            // held, the placeholder's run merged with the free space below it and
-            // the old test plugged the only hole that fit (every launch of ml1095
-            // ended in the guest window). Plug only holes ending below the placeholder.
-            if earlyPoolBase != 0 && windowHeld {
-                for h in holes where h.base + h.size <= earlyPoolBase && h.size >= vm_address_t(poolSize) {
-                    var a = h.base
-                    if vm_allocate(mach_task_self_, &a, vm_size_t(h.size), 0 /* FIXED */) == KERN_SUCCESS && a == h.base {
-                        plugs.append((a, vm_size_t(h.size)))
-                        LogStore.shared.log(String(format: "ml1040: plugged lower hole 0x%lx+%luMB so first-fit lands above the window",
-                                                   Int(h.base), Int(h.size >> 20)))
-                    } else if a != h.base { vm_deallocate(mach_task_self_, a, vm_size_t(h.size)) }
+
+            let pageMask = vm_address_t(0x3fff)
+            if poolSize >= 256 << 20,
+               let hole = holes.first(where: { h in
+                   let aligned = (h.base + pageMask) & ~pageMask
+                   return aligned + vm_address_t(poolSize) <= h.base + h.size
+                       && !overlapsExeWindow(aligned, vm_address_t(poolSize))
+               }) {
+                let exactBase = (hole.base + pageMask) & ~pageMask
+                var fixed = exactBase
+                let allocKr = vm_allocate(mach_task_self_, &fixed, vm_size_t(poolSize), 0 /* FIXED, no overwrite */)
+                if allocKr == KERN_SUCCESS && fixed == exactBase {
+                    rxPtrOpt = prepareExactPool(exactBase, poolSize, label: "hole-reservation")
+                    if rxPtrOpt == nil {
+                        _ = vm_deallocate(mach_task_self_, exactBase, vm_size_t(poolSize))
+                    }
+                } else {
+                    if allocKr == KERN_SUCCESS {
+                        _ = vm_deallocate(mach_task_self_, fixed, vm_size_t(poolSize))
+                    }
+                    LogStore.shared.log("Could not reserve measured JIT hole kr=\(allocKr)", level: .error)
                 }
             }
         }
 
-        var rxPtrOpt: UnsafeMutableRawPointer? = nil
-        for attempt in 0..<3 {
-            guard let p = jit26_prepare_region(nil, poolSize), p != UnsafeMutableRawPointer(bitPattern: 0) else {
-                LogStore.shared.log("Debugger failed to allocate RX memory (attempt \(attempt))", level: .error)
-                break
+        // Compatibility fallback for older StikDebug builds whose
+        // prepare_memory_region cannot bless an app-created mapping.
+        if rxPtrOpt == nil {
+            for attempt in 0..<3 {
+                guard let p = jit26_prepare_region(nil, poolSize),
+                      p != UnsafeMutableRawPointer(bitPattern: 0) else {
+                    LogStore.shared.log("StikDebug first-fit RX allocation failed (attempt \(attempt + 1))", level: .error)
+                    break
+                }
+                let a = Int(bitPattern: p)
+                let inGuestWindow = a + poolSize > guestLo && a < guestHi
+                let hitsExeWindow = overlapsExeWindow(vm_address_t(a), vm_address_t(poolSize))
+                if a >= goodLow && !inGuestWindow && !hitsExeWindow {
+                    rxPtrOpt = p
+                    break
+                }
+                LogStore.shared.log(String(format: "Rejected first-fit RX pool 0x%lx (%@), attempt %d",
+                                           a,
+                                           a < goodLow ? "below FEX safe floor"
+                                             : (hitsExeWindow ? "overlaps fixed executable window"
+                                                              : "inside x86-64 guest window"),
+                                           attempt + 1), level: .error)
+                _ = vm_deallocate(mach_task_self_, vm_address_t(a), vm_size_t(poolSize))
             }
-            let a = Int(bitPattern: p)
-            let inGuestWindow = a + poolSize > guestLo && a < guestHi
-            // ml1034: a pool covering 0x140000000 displaces a non-relocatable
-            // main image, which is fatal later and unrecoverable.
-            let hitsExeWindow = overlapsExeWindow(vm_address_t(a), vm_address_t(poolSize))
-            if a >= goodLow && !inGuestWindow && !hitsExeWindow {
-                rxPtrOpt = p
-                break
-            }
-            LogStore.shared.log(String(format: "BAD POOL placement 0x%lx (%@) — re-rolling (attempt %d)",
-                                       a,
-                                       a < goodLow ? "mode A low"
-                                         : (hitsExeWindow ? "swallows the 0x140000000 executable window"
-                                                          : "guest 64G window"),
-                                       attempt), level: .error)
-            let dkr = vm_deallocate(mach_task_self_, vm_address_t(a), vm_size_t(poolSize))
-            LogStore.shared.log(dkr == KERN_SUCCESS
-                ? "  bad region freed"
-                : "  bad region kept as pin (vm_deallocate kr=\(dkr))")
         }
-        // ml1040: the plugs existed only to steer first-fit; give the VA back.
-        for (a, sz) in plugs { vm_deallocate(mach_task_self_, a, sz) }
+
         guard let rxPtr = rxPtrOpt else {
-            LogStore.shared.log("BAD POOL: no valid placement after retries. Killing in 10s — please relaunch.", level: .error)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10) {
-                LogStore.shared.log("BAD POOL — exiting now. Relaunch the app.", level: .error)
-                exit(0)
-            }
+            LogStore.shared.log("JIT pool setup failed after CS_DEBUGGED: no safe executable region could be prepared.", level: .error)
+            LogStore.shared.log("The process is staying alive so the complete StikDebug/VM diagnostics remain visible.", level: .info)
             return nil
         }
         let rxAddr = Int(bitPattern: rxPtr)
