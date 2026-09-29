@@ -1140,6 +1140,11 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
+                Button("Run Linux ELF L0") {
+                    runFEXTest()
+                }
+                .buttonStyle(.bordered)
+
                 Button("Steam Testing") {
                     // Steam S3 first boot: virtual desktop (Steam needs a
                     // window manager) + services.exe (SCM → rpcss for Steam's
