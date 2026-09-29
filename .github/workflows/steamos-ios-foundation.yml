@@ -197,7 +197,7 @@ jobs:
           grep -F 'active.count >= 3' app/Madeira/ContentView.swift
           grep -F 'NotificationCenter.default.post(name: .steamOSSettingsRequested' app/Madeira/ContentView.swift
           grep -F 'STEAMOS_IOS_TOUCHSCREEN' app/Madeira/ContentView.swift
-          grep -F 'struct SteamOSiOSApp: App' app/Madeira/MadeiraApp.swift
+          grep -F 'struct SteamIOSApp: App' app/Madeira/MadeiraApp.swift
 
       - name: Verify D3D11 Metal path
         shell: bash
