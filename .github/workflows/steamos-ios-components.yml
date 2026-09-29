@@ -9,6 +9,7 @@ on:
       - "build/fex-ios/**"
       - "build/wineserver/**"
       - "tools/bootstrap/**"
+      - "tools/patches/**"
   workflow_dispatch:
 
 permissions:
