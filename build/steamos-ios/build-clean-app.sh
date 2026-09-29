@@ -83,4 +83,65 @@ test -s "$APP/Madeira"
 
 bash tools/packaging/package-ipa.sh "$APP" "$IPA"
 
-echo "STEAMOS_IOS_CLEAN_APP_OK app=$APP ipa=$IPA"
+python3 - "$R" "$APP" "$IPA" "$ARTIFACTS/build-info.json" <<'PY'
+from __future__ import annotations
+import hashlib, json, pathlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+app = pathlib.Path(sys.argv[2])
+ipa = pathlib.Path(sys.argv[3])
+out = pathlib.Path(sys.argv[4])
+
+def cmd(*args: str, cwd: pathlib.Path | None = None) -> str:
+    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+def rev(path: str) -> str | None:
+    p = root / path
+    if not (p / ".git").exists() and not (root / ".git" / "modules" / path).exists():
+        try:
+            return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+        except Exception:
+            return None
+    try:
+        return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+    except Exception:
+        return None
+
+def sha256(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+xcode = cmd("xcodebuild", "-version").splitlines()
+info = {
+    "commit": cmd("git", "rev-parse", "HEAD", cwd=root),
+    "fex": rev("FEX"),
+    "wine": rev("wine"),
+    "dxmt": rev("research/dxmt"),
+    "llvm": rev("toolchains/llvm-project"),
+    "vkd3d": None,
+    "moltenvk": None,
+    "xcode": xcode,
+    "sdk": cmd("xcrun", "--sdk", "iphoneos", "--show-sdk-version"),
+    "app": {
+        "path": str(app),
+        "executable_sha256": sha256(app / "Madeira"),
+    },
+    "ipa": {
+        "path": str(ipa),
+        "sha256": sha256(ipa),
+        "size": ipa.stat().st_size,
+    },
+}
+out.write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
+print(f"BUILD_INFO_OK {out}")
+PY
+
+(
+  cd "$ARTIFACTS"
+  shasum -a 256 SteamOS-iOS.ipa build-info.json > SHA256SUMS
+)
+
+echo "STEAMOS_IOS_CLEAN_APP_OK app=$APP ipa=$IPA build_info=$ARTIFACTS/build-info.json"
