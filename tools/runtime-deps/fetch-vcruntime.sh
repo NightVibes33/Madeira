@@ -145,20 +145,21 @@ import hashlib, pathlib, shutil, struct, sys
 
 tree = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
-wanted = [
-    "concrt140.dll",
-    "msvcp140.dll",
-    "msvcp140_1.dll",
-    "msvcp140_2.dll",
-    "msvcp140_atomic_wait.dll",
-    "msvcp140_codecvt_ids.dll",
-    "vcamp140.dll",
-    "vccorlib140.dll",
-    "vcomp140.dll",
-    "vcruntime140.dll",
-    "vcruntime140_1.dll",
-    "vcruntime140_threads.dll",
-]
+expected = {
+    "concrt140.dll": "a5b9af428829ab7b61ceae9d88a37ce1053551379ee007d8df53a7ba4d33c251",
+    "msvcp140.dll": "639342ea9a67c0009122238ce070a8257e2e04d367d627509fec29f8442afb42",
+    "msvcp140_1.dll": "456aebccb449fcba35f1109c259ba0aa10923e660f4de812a490d35f37f54fc9",
+    "msvcp140_2.dll": "7a403abf753d0bdf09776cf4bcb13b5a6ebe3a47670de124a3c621aa4b952f82",
+    "msvcp140_atomic_wait.dll": "d759dd381bdbd6142372de4cb57acc382e1b80c106b7414a408816564ee1eb6a",
+    "msvcp140_codecvt_ids.dll": "f781e1e0133c397c3a2c73fd4dbcdb442378ba20fced56a2f7db5822436ddd2a",
+    "vcamp140.dll": "4c8272cc59704b1acf67a20fbbff1fad139ca39b331e1de9d207272feeb4236e",
+    "vccorlib140.dll": "9ce6f235791450717f8e05ecd729e95ec98e9630a9caae661ba6773b669ecbf7",
+    "vcomp140.dll": "f96f3a14d88d8846f31f3ab38a490304ce7d6e4f70fae4304c63e59c7aea2d30",
+    "vcruntime140.dll": "19c293ac482fdb882cd29d2b0e6d807419efdcada04068f03e5723670895e17d",
+    "vcruntime140_1.dll": "a253a12e4a8e9e23ebfe0ced829f7751e4f42c60066986bf20515ced8dcc68cd",
+    "vcruntime140_threads.dll": "cd05a48a1183b074e81275d6c6472ecb5b09db8a0db8d1850b009ad041907ce9",
+}
+wanted = list(expected)
 
 def pe_info(path: pathlib.Path):
     try:
@@ -223,6 +224,10 @@ for name in wanted:
         raise SystemExit(f"ambiguous differing AMD64 candidates for {name}:\n{detail}")
 
     src, digest, data = matches[0]
+    if digest != expected[name]:
+        raise SystemExit(
+            f"{name}: pinned DLL SHA-256 mismatch: expected {expected[name]}, got {digest}"
+        )
     dst = out / name
     shutil.copyfile(src, dst)
     if hashlib.sha256(dst.read_bytes()).hexdigest() != digest:
