@@ -39,6 +39,15 @@ jobs:
       - name: Install build tool
         run: brew install ninja
 
+      - name: Install Xcode Metal Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+          echo "METAL_TOOLCHAIN_OK"
+
       - name: Materialize pinned llvm-project
         run: bash tools/runtime-deps/fetch-llvm-project.sh
 
