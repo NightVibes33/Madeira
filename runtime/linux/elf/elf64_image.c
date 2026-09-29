@@ -79,6 +79,108 @@ static int align_up_checked(uint64_t value, uint64_t alignment, uint64_t *out)
     return 0;
 }
 
+static enum steamos_elf64_error read_header_and_phdr_bounds(
+    const uint8_t *data,
+    size_t size,
+    struct elf64_ehdr_wire *eh,
+    uint64_t *ph_end)
+{
+    uint64_t ph_bytes;
+
+    if (!data || !eh || !ph_end) return STEAMOS_ELF64_ERR_ARGUMENT;
+    if (size < sizeof(*eh)) return STEAMOS_ELF64_ERR_TRUNCATED_HEADER;
+    memcpy(eh, data, sizeof(*eh));
+
+    if (eh->e_ident[EI_MAG0] != 0x7f || eh->e_ident[EI_MAG1] != 'E' ||
+        eh->e_ident[EI_MAG2] != 'L' || eh->e_ident[EI_MAG3] != 'F')
+        return STEAMOS_ELF64_ERR_MAGIC;
+    if (eh->e_ident[EI_CLASS] != ELFCLASS64) return STEAMOS_ELF64_ERR_CLASS;
+    if (eh->e_ident[EI_DATA] != ELFDATA2LSB) return STEAMOS_ELF64_ERR_ENDIAN;
+    if (eh->e_ident[EI_VERSION] != EV_CURRENT || eh->e_version != EV_CURRENT)
+        return STEAMOS_ELF64_ERR_VERSION;
+    if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) return STEAMOS_ELF64_ERR_TYPE;
+    if (eh->e_machine != EM_X86_64) return STEAMOS_ELF64_ERR_MACHINE;
+    if (eh->e_phentsize != sizeof(struct elf64_phdr_wire))
+        return STEAMOS_ELF64_ERR_PHENTSIZE;
+    if (mul_overflow_u64(eh->e_phnum, eh->e_phentsize, &ph_bytes) ||
+        add_overflow_u64(eh->e_phoff, ph_bytes, ph_end) ||
+        *ph_end > (uint64_t)size)
+        return STEAMOS_ELF64_ERR_PHDR_BOUNDS;
+    return STEAMOS_ELF64_OK;
+}
+
+enum steamos_elf64_error steamos_elf64_find_interpreter(
+    const void *bytes,
+    size_t size,
+    struct steamos_elf64_interpreter *out_interpreter)
+{
+    const uint8_t *data = (const uint8_t *)bytes;
+    struct elf64_ehdr_wire eh;
+    uint64_t ph_end;
+    uint16_t i;
+    int found = 0;
+    enum steamos_elf64_error err;
+
+    if (!data || !out_interpreter) return STEAMOS_ELF64_ERR_ARGUMENT;
+    memset(out_interpreter, 0, sizeof(*out_interpreter));
+
+    err = read_header_and_phdr_bounds(data, size, &eh, &ph_end);
+    if (err != STEAMOS_ELF64_OK) return err;
+    (void)ph_end;
+
+    for (i = 0; i < eh.e_phnum; ++i) {
+        struct elf64_phdr_wire ph;
+        uint64_t ph_offset = eh.e_phoff + (uint64_t)i * eh.e_phentsize;
+        uint64_t interp_end;
+        const uint8_t *nul;
+        size_t length;
+
+        memcpy(&ph, data + ph_offset, sizeof(ph));
+        if (ph.p_type != PT_INTERP) continue;
+        if (found) return STEAMOS_ELF64_ERR_MULTIPLE_INTERPRETERS;
+        found = 1;
+
+        if (!ph.p_filesz ||
+            add_overflow_u64(ph.p_offset, ph.p_filesz, &interp_end) ||
+            interp_end > (uint64_t)size)
+            return STEAMOS_ELF64_ERR_INTERPRETER_BOUNDS;
+        if (ph.p_filesz > STEAMOS_ELF64_INTERPRETER_MAX + 1)
+            return STEAMOS_ELF64_ERR_INTERPRETER_TOO_LONG;
+
+        nul = (const uint8_t *)memchr(data + ph.p_offset, 0, (size_t)ph.p_filesz);
+        if (!nul || nul == data + ph.p_offset)
+            return STEAMOS_ELF64_ERR_INTERPRETER_TERMINATION;
+        length = (size_t)(nul - (data + ph.p_offset));
+        if (length > STEAMOS_ELF64_INTERPRETER_MAX)
+            return STEAMOS_ELF64_ERR_INTERPRETER_TOO_LONG;
+
+        memcpy(out_interpreter->path, data + ph.p_offset, length);
+        out_interpreter->path[length] = '\0';
+        out_interpreter->length = length;
+    }
+
+    return found ? STEAMOS_ELF64_OK : STEAMOS_ELF64_ERR_NO_INTERPRETER;
+}
+
+enum steamos_elf64_error steamos_elf64_runtime_address(
+    const struct steamos_elf64_image *image,
+    uint64_t mapped_base,
+    uint64_t virtual_address,
+    uint64_t *out_runtime_address)
+{
+    uint64_t relative;
+
+    if (!image || !out_runtime_address || image->load_max <= image->load_min)
+        return STEAMOS_ELF64_ERR_ARGUMENT;
+    if (virtual_address < image->load_min || virtual_address >= image->load_max)
+        return STEAMOS_ELF64_ERR_ADDRESS_NOT_MAPPED;
+
+    relative = virtual_address - image->load_min;
+    if (add_overflow_u64(mapped_base, relative, out_runtime_address))
+        return STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW;
+    return STEAMOS_ELF64_OK;
+}
+
 enum steamos_elf64_error steamos_elf64_parse(
     const void *bytes,
     size_t size,
@@ -97,24 +199,13 @@ enum steamos_elf64_error steamos_elf64_parse(
         return STEAMOS_ELF64_ERR_ARGUMENT;
     memset(out_image, 0, sizeof(*out_image));
 
-    if (size < sizeof(eh)) return STEAMOS_ELF64_ERR_TRUNCATED_HEADER;
-    memcpy(&eh, data, sizeof(eh));
-
-    if (eh.e_ident[EI_MAG0] != 0x7f || eh.e_ident[EI_MAG1] != 'E' ||
-        eh.e_ident[EI_MAG2] != 'L' || eh.e_ident[EI_MAG3] != 'F')
-        return STEAMOS_ELF64_ERR_MAGIC;
-    if (eh.e_ident[EI_CLASS] != ELFCLASS64) return STEAMOS_ELF64_ERR_CLASS;
-    if (eh.e_ident[EI_DATA] != ELFDATA2LSB) return STEAMOS_ELF64_ERR_ENDIAN;
-    if (eh.e_ident[EI_VERSION] != EV_CURRENT || eh.e_version != EV_CURRENT)
-        return STEAMOS_ELF64_ERR_VERSION;
-    if (eh.e_type != ET_EXEC && eh.e_type != ET_DYN) return STEAMOS_ELF64_ERR_TYPE;
-    if (eh.e_machine != EM_X86_64) return STEAMOS_ELF64_ERR_MACHINE;
-    if (eh.e_phentsize != sizeof(struct elf64_phdr_wire)) return STEAMOS_ELF64_ERR_PHENTSIZE;
-
-    if (mul_overflow_u64(eh.e_phnum, eh.e_phentsize, &ph_bytes) ||
-        add_overflow_u64(eh.e_phoff, ph_bytes, &ph_end) ||
-        ph_end > (uint64_t)size)
-        return STEAMOS_ELF64_ERR_PHDR_BOUNDS;
+    {
+        enum steamos_elf64_error header_error =
+            read_header_and_phdr_bounds(data, size, &eh, &ph_end);
+        if (header_error != STEAMOS_ELF64_OK) return header_error;
+        ph_bytes = ph_end - eh.e_phoff;
+        (void)ph_bytes;
+    }
 
     for (i = 0; i < eh.e_phnum; ++i) {
         struct elf64_phdr_wire ph;
@@ -189,6 +280,12 @@ const char *steamos_elf64_error_string(enum steamos_elf64_error error)
     case STEAMOS_ELF64_ERR_PHENTSIZE: return "unexpected program-header size";
     case STEAMOS_ELF64_ERR_PHDR_BOUNDS: return "program-header table is out of bounds";
     case STEAMOS_ELF64_ERR_INTERPRETER_UNSUPPORTED: return "PT_INTERP requires the L1 dynamic loader";
+    case STEAMOS_ELF64_ERR_NO_INTERPRETER: return "ELF has no PT_INTERP";
+    case STEAMOS_ELF64_ERR_MULTIPLE_INTERPRETERS: return "ELF has multiple PT_INTERP headers";
+    case STEAMOS_ELF64_ERR_INTERPRETER_BOUNDS: return "PT_INTERP exceeds file bounds";
+    case STEAMOS_ELF64_ERR_INTERPRETER_TERMINATION: return "PT_INTERP path is empty or unterminated";
+    case STEAMOS_ELF64_ERR_INTERPRETER_TOO_LONG: return "PT_INTERP path exceeds runtime limit";
+    case STEAMOS_ELF64_ERR_ADDRESS_NOT_MAPPED: return "ELF virtual address is outside the mapped image";
     case STEAMOS_ELF64_ERR_SEGMENT_BOUNDS: return "load segment exceeds file bounds";
     case STEAMOS_ELF64_ERR_SEGMENT_SIZE: return "load segment file size exceeds memory size";
     case STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW: return "ELF address arithmetic overflow";
