@@ -18,6 +18,8 @@ OUT_LIB="$BUILD_DIR/libdxmt_unix.a"
 python3 "$REPO_ROOT/tools/patches/apply-dxmt-ios-xcode27.py" "$DXMT_ROOT"
 mkdir -p "$OBJ_DIR"
 
+python3 "$BUILD_DIR/apply-xcode27-source-fixes.py" "$DXMT_ROOT"
+
 COMMON_FLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=18.0 -fblocks -O2"
 INCLUDES="-I$DXMT_ROOT/include -I$DXMT_ROOT/libs -I$DXMT_SRC/winemetal -I$DXMT_SRC/airconv"
 INCLUDES_DIRECTX="-I$DXMT_ROOT/include/native/directx -I$DXMT_ROOT/include/native/windows"
