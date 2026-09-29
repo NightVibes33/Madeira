@@ -63,7 +63,7 @@
 		A2000006 /* Madeira-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Madeira-Bridging-Header.h"; sourceTree = "<group>"; };
 		A2000007 /* Madeira.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Madeira.entitlements; sourceTree = "<group>"; };
 		A2000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A2000009 /* Madeira.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Madeira.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000009 /* SteamIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SteamIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A200000A /* EntitlementChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementChecker.swift; sourceTree = "<group>"; };
 		A2000016 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
 		A200001E /* WineServerBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WineServerBridge.m; sourceTree = "<group>"; };
@@ -193,7 +193,7 @@
 		A4000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A2000009 /* Madeira.app */,
+				A2000009 /* SteamIOS.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -238,7 +238,7 @@
 			);
 			name = Madeira;
 			productName = Madeira;
-			productReference = A2000009 /* Madeira.app */;
+			productReference = A2000009 /* SteamIOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -444,7 +444,7 @@
 				);
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.willfaust.madeora;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = SteamIOS;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -495,7 +495,7 @@
 				);
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.willfaust.madeora;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = SteamIOS;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;

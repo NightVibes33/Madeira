@@ -1,4 +1,4 @@
-name: SteamOS-iOS clean app + IPA
+name: SteamIOS clean app + IPA
 
 on:
   workflow_dispatch:
@@ -138,24 +138,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s artifacts/SteamOS-iOS.ipa
-          test -s artifacts/SteamOS-iOS.ipa.sha256
+          test -s artifacts/SteamIOS.ipa
+          test -s artifacts/SteamIOS.ipa.sha256
           test -s artifacts/build-info.json
           test -s artifacts/SHA256SUMS
           (cd artifacts && shasum -a 256 -c SHA256SUMS)
-          unzip -tq artifacts/SteamOS-iOS.ipa
-          unzip -Z1 artifacts/SteamOS-iOS.ipa | grep -q '^Payload/[^/]*\.app/Info.plist$'
-          echo "STEAMOS_IOS_IPA_GATE_OK"
+          unzip -tq artifacts/SteamIOS.ipa
+          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/[^/]*\.app/Info.plist$'
+          echo "STEAMIOS_IPA_GATE_OK"
 
-      - name: Upload SteamOS-iOS IPA
+      - name: Upload SteamIOS IPA
         uses: actions/upload-artifact@v4
         with:
-          name: SteamOS-iOS-Debug-unsigned
+          name: SteamIOS-Debug-unsigned
           path: |
-            artifacts/SteamOS-iOS.ipa
-            artifacts/SteamOS-iOS.ipa.sha256
+            artifacts/SteamIOS.ipa
+            artifacts/SteamIOS.ipa.sha256
             artifacts/build-info.json
             artifacts/SHA256SUMS
-            build/steamos-ios-derived/Build/Products/Debug-iphoneos/Madeira.app.dSYM
+            build/steamos-ios-derived/Build/Products/Debug-iphoneos/SteamIOS.app.dSYM
           if-no-files-found: error
           compression-level: 0

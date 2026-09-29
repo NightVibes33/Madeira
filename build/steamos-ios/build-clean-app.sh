@@ -1,17 +1,17 @@
 #!/bin/bash
-# Rebuild every clean-generated native input required by Madeira.app, then
+# Rebuild every clean-generated native input required by SteamIOS.app, then
 # perform an unsigned Debug iPhoneOS link and package a structurally valid IPA.
 set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DERIVED="${STEAMOS_DERIVED_DATA:-$R/build/steamos-ios-derived}"
 ARTIFACTS="${STEAMOS_ARTIFACTS:-$R/artifacts}"
-APP="$DERIVED/Build/Products/Debug-iphoneos/Madeira.app"
-IPA="$ARTIFACTS/SteamOS-iOS.ipa"
+APP="$DERIVED/Build/Products/Debug-iphoneos/SteamIOS.app"
+IPA="$ARTIFACTS/SteamIOS.ipa"
 
 cd "$R"
 
-echo "=== SteamOS-iOS clean app build ==="
+echo "=== SteamIOS clean app build ==="
 python3 tools/verify-madeira-pins.py
 
 for tool in cmake ninja meson python3 xcodebuild; do
@@ -136,7 +136,7 @@ xcodebuild   -project app/Madeira.xcodeproj   -scheme Madeira   -configuration D
 
 test -d "$APP"
 test -s "$APP/Info.plist"
-test -s "$APP/Madeira"
+test -s "$APP/SteamIOS"
 
 /usr/bin/codesign --verify --verbose=2 "$APP/d3d12/libmetalirconverter.dylib" >/dev/null 2>&1 || {
   echo "error: bundled Metal Shader Converter dylib is not code-signed" >&2
@@ -215,7 +215,7 @@ PY
 
 (
   cd "$ARTIFACTS"
-  shasum -a 256 SteamOS-iOS.ipa build-info.json > SHA256SUMS
+  shasum -a 256 SteamIOS.ipa build-info.json > SHA256SUMS
 )
 
-echo "STEAMOS_IOS_CLEAN_APP_OK app=$APP ipa=$IPA build_info=$ARTIFACTS/build-info.json"
+echo "STEAMIOS_CLEAN_APP_OK app=$APP ipa=$IPA build_info=$ARTIFACTS/build-info.json"

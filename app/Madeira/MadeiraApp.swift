@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct SteamOSiOSApp: App {
+struct SteamIOSApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

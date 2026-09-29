@@ -832,7 +832,7 @@ static void *wine_process_thread(void *arg) {
          * is the pure branch-feeder) or a writer-side fix. Healer stays
          * opt-in-off. */
 
-        /* Steam identity policy for SteamOS-iOS.
+        /* Steam identity policy for SteamIOS.
          *
          * Never publish one title's AppID to every guest. Real Steam is the authority
          * for Steam-launched children and must be free to construct each game's own

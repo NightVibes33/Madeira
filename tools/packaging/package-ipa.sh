@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
-  echo "usage: $0 /path/to/SteamOS-iOS.app output.ipa [sha256-output]" >&2
+  echo "usage: $0 /path/to/SteamIOS.app output.ipa [sha256-output]" >&2
   exit 2
 fi
 APP=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")

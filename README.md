@@ -1,14 +1,14 @@
-# Madeira
+# SteamIOS
 
-Run Windows PC games on a non-jailbroken iPhone.
+Run Windows PC games locally on iPhone and iPad.
 
-Madeira combines [Wine](https://www.winehq.org/) (ARM64EC),
+SteamIOS is built on the Madeira runtime and combines [Wine](https://www.winehq.org/) (ARM64EC),
 [FEX-Emu](https://github.com/FEX-Emu/FEX) for x86-64 → ARM64 translation, and
 [DXMT](https://github.com/3Shain/DXMT) for D3D11 → Metal, running as a single
 Mach process on iOS with wineserver as a thread rather than a separate process.
 
 
-## SteamOS-iOS Windows-first runtime
+## SteamIOS Windows-first runtime
 
 The `steamos-ios` branch runs the real Windows Steam client through Madeira's
 Wine ARM64EC/WoW64 + FEX stack. It does not boot Linux/Windows in a VM and does
