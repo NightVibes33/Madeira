@@ -152,10 +152,29 @@ def pe_info(path: pathlib.Path):
     except (OSError, struct.error):
         return None
 
+def normalized_payload_name(filename: str) -> str | None:
+    lower = filename.lower()
+    # WiX Burn v14 payload members are commonly:
+    #   concrt140.dll_amd64
+    #   vcomp140.dll_system_amd64
+    # Keep only AMD64 payloads and strip install-directory markers.
+    if lower.endswith("_amd64"):
+        lower = lower[:-6]
+        for marker in ("_system", "_app"):
+            if lower.endswith(marker):
+                lower = lower[:-len(marker)]
+        return lower
+    if lower.startswith("f_central_") and lower.endswith("_x64"):
+        core = lower[len("f_central_"):-len("_x64")]
+        return core if core.endswith(".dll") else core + ".dll"
+    if lower.endswith(".dll"):
+        return lower
+    return None
+
 for name in wanted:
     matches = []
     for p in tree.rglob("*"):
-        if not p.is_file() or p.name.lower() != name.lower():
+        if not p.is_file() or normalized_payload_name(p.name) != name.lower():
             continue
         info = pe_info(p)
         if not info:
