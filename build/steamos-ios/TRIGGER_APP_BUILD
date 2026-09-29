@@ -1,2 +1,2 @@
-trigger=steamios-clear-cache-link-fix-20260929
-purpose=clean-ipa-after-darwin-instruction-cache-bridge
+trigger=steamios-clear-cache-signature-fix-20260929
+purpose=clean-ipa-after-correct-clang-builtin-signature

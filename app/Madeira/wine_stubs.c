@@ -3,6 +3,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <libkern/OSCacheControl.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // Wine build version string (normally generated at compile time)
 const char wine_build[] = "wine-10.0-ios";
@@ -18,10 +19,15 @@ CFDictionaryRef IOPSGetPowerSourceDescription(CFTypeRef blob, CFTypeRef ps) {
 // __clear_cache(begin, end) entry point. compiler-rt does not export that
 // symbol to this iOS app link, so provide the Darwin implementation here.
 // This is required for generated/JIT code to become visible to the CPU.
-void __clear_cache(char *begin, char *end)
+void __clear_cache(void *begin, void *end)
 {
-    if (!begin || !end || end <= begin) return;
-    size_t length = (size_t)(end - begin);
+    if (!begin || !end) return;
+
+    uintptr_t first = (uintptr_t)begin;
+    uintptr_t last = (uintptr_t)end;
+    if (last <= first) return;
+
+    size_t length = (size_t)(last - first);
     sys_dcache_flush(begin, length);
     sys_icache_invalidate(begin, length);
 }
