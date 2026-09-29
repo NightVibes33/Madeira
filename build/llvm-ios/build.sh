@@ -54,7 +54,9 @@ if [[ ! -f "$IOS/CMakeCache.txt" ]]; then
         -DLLVM_TARGETS_TO_BUILD= \
         -DLLVM_ENABLE_PROJECTS= \
         -DLLVM_BUILD_TOOLS=OFF \
+        -DLLVM_INCLUDE_TOOLS=OFF \
         -DLLVM_BUILD_UTILS=OFF \
+        -DLLVM_INCLUDE_UTILS=OFF \
         -DLLVM_INCLUDE_TESTS=OFF \
         -DLLVM_INCLUDE_BENCHMARKS=OFF \
         -DLLVM_INCLUDE_EXAMPLES=OFF \
@@ -67,8 +69,8 @@ if [[ ! -f "$IOS/CMakeCache.txt" ]]; then
         -DLLVM_LINK_LLVM_DYLIB=OFF
 fi
 
-echo "=== Building LLVM iOS static libraries ==="
-cmake --build "$IOS" -j "$JOBS"
+echo "=== Building LLVM iOS static libraries only ==="
+cmake --build "$IOS" --target llvm-libraries -j "$JOBS"
 
 required=(
     libLLVMCore.a
