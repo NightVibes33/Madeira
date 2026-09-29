@@ -84,5 +84,6 @@ jobs:
           lipo -info app/Madeira/libdxmt_combined.a | grep -q arm64
           members="$(ar -t app/Madeira/libdxmt_combined.a | awk '/\.o$/ {n++} END {print n+0}')"
           test "$members" -ge 50
-          nm -g app/Madeira/libdxmt_combined.a | grep -q 'dxmt_winemetal_unix_call_funcs'
+          nm -g app/Madeira/libdxmt_combined.a > "$RUNNER_TEMP/dxmt-symbols.txt"
+          grep -q 'dxmt_winemetal_unix_call_funcs' "$RUNNER_TEMP/dxmt-symbols.txt"
           echo "DXMT_IOS_CLEAN_BUILD_OK members=$members"

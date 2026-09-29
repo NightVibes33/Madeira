@@ -35,7 +35,8 @@ mkdir -p "$OBJ_DIR"
 # directly. Materialize the exact IDL closure first.
 python3 "$REPO_ROOT/tools/runtime-deps/build-wine-idl-headers.py" \
     "$WINE_SRC" "$WINE_BUILD" \
-    objidlbase.idl objidl.idl shobjidl.idl exdisp.idl shldisp.idl dxgi.idl
+    objidlbase.idl objidl.idl shobjidl.idl exdisp.idl shldisp.idl \
+    dxgi.idl d3d10.idl d3d11.idl d3d12.idl
 
 SUCCEEDED=0
 FAILED=0
