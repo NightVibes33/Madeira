@@ -56,18 +56,30 @@ def visit(name: str) -> None:
             visit(dep)
 
     # WIDL sources can emit extra generated-header dependencies through
-    # cpp_quote("#include \\"foo.h\\""). Parse this exact source syntax
-    # without a regex so escaped quote handling cannot drift.
-    cpp_marker = 'cpp_quote("#include \\"'
+    # cpp_quote("#include \\"foo.h\\"") *or* cpp_quote("#include <foo.h>").
+    # Wine's D3D IDLs use both forms, so parse either delimiter explicitly.
+    cpp_marker = 'cpp_quote("#include '
     for line in text.splitlines():
         start = line.find(cpp_marker)
         if start < 0:
             continue
         start += len(cpp_marker)
-        end = line.find('\\"', start)
-        if end <= start:
-            fail(f"malformed cpp_quote include in {name}: {line}")
-        header = line[start:end]
+        tail = line[start:]
+
+        if tail.startswith("<"):
+            end = tail.find(">", 1)
+            if end <= 1:
+                fail(f"malformed cpp_quote include in {name}: {line}")
+            header = tail[1:end]
+        elif tail.startswith('\\"'):
+            end = tail.find('\\"', 2)
+            if end <= 2:
+                fail(f"malformed cpp_quote include in {name}: {line}")
+            header = tail[2:end]
+        else:
+            # Not a generated include (cpp_quote is also used for arbitrary C).
+            continue
+
         candidate = str(pathlib.PurePosixPath(header).with_suffix(".idl"))
         if (include / candidate).is_file() and candidate not in visiting:
             # Generated headers can mutually include one another even though
