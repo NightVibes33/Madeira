@@ -13,15 +13,7 @@
 		A1000077 /* MadeiraConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000077 /* MadeiraConfig.swift */; };
 		A1000004 /* JITAllocator.c in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* JITAllocator.c */; };
 		A1000005 /* EntitlementChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000A /* EntitlementChecker.swift */; };
-		A1000006 /* FEXBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = A200000B /* FEXBridge.mm */; };
-		A1000010 /* libFEXCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000010 /* libFEXCore.a */; };
-		A1000011 /* libFEXCore_Base.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000011 /* libFEXCore_Base.a */; };
-		A1000012 /* libfmt.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000012 /* libfmt.a */; };
-		A1000013 /* libcephes_128bit.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000013 /* libcephes_128bit.a */; };
-		A1000014 /* libxxhash.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000014 /* libxxhash.a */; };
-		A1000015 /* libsoftfloat_3e.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000015 /* libsoftfloat_3e.a */; };
 		A1000016 /* libc++.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000016 /* libc++.tbd */; };
-		A1000017 /* libJemallocLibs.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000017 /* libJemallocLibs.a */; };
 		A1000020 /* WineServerBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = A200001E /* WineServerBridge.m */; };
 		A1000021 /* libwineserver.a in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000020 /* libwineserver.a */; };
 		A1000022 /* nls in Resources */ = {isa = PBXBuildFile; fileRef = A2000021 /* nls */; };
@@ -73,16 +65,7 @@
 		A2000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000009 /* Madeira.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Madeira.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A200000A /* EntitlementChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementChecker.swift; sourceTree = "<group>"; };
-		A200000B /* FEXBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = FEXBridge.mm; sourceTree = "<group>"; };
-		A200000C /* FEXBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FEXBridge.h; sourceTree = "<group>"; };
-		A2000010 /* libFEXCore.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFEXCore.a; path = "../../FEX/build-ios/FEXCore/Source/libFEXCore.a"; sourceTree = "<group>"; };
-		A2000011 /* libFEXCore_Base.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libFEXCore_Base.a; path = "../../FEX/build-ios/FEXCore/Source/libFEXCore_Base.a"; sourceTree = "<group>"; };
-		A2000012 /* libfmt.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libfmt.a; path = "../../FEX/build-ios/External/fmt/libfmt.a"; sourceTree = "<group>"; };
-		A2000013 /* libcephes_128bit.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libcephes_128bit.a; path = "../../FEX/build-ios/External/cephes/libcephes_128bit.a"; sourceTree = "<group>"; };
-		A2000014 /* libxxhash.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libxxhash.a; path = "../../FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a"; sourceTree = "<group>"; };
-		A2000015 /* libsoftfloat_3e.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libsoftfloat_3e.a; path = "../../FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a"; sourceTree = "<group>"; };
 		A2000016 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
-		A2000017 /* libJemallocLibs.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libJemallocLibs.a; path = "../../FEX/build-ios/FEXCore/Source/libJemallocLibs.a"; sourceTree = "<group>"; };
 		A200001E /* WineServerBridge.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WineServerBridge.m; sourceTree = "<group>"; };
 		A200001F /* WineServerBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WineServerBridge.h; sourceTree = "<group>"; };
 		A2000020 /* libwineserver.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libwineserver.a; sourceTree = "<group>"; };
@@ -132,14 +115,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000010 /* libFEXCore.a in Frameworks */,
-				A1000011 /* libFEXCore_Base.a in Frameworks */,
-				A1000012 /* libfmt.a in Frameworks */,
-				A1000013 /* libcephes_128bit.a in Frameworks */,
-				A1000014 /* libxxhash.a in Frameworks */,
-				A1000015 /* libsoftfloat_3e.a in Frameworks */,
 				A1000016 /* libc++.tbd in Frameworks */,
-				A1000017 /* libJemallocLibs.a in Frameworks */,
 				A1000021 /* libwineserver.a in Frameworks */,
 				A1000031 /* libntdll_unix.a in Frameworks */,
 				A1000034 /* IOKit.framework in Frameworks */,
@@ -184,8 +160,6 @@
 				A2000202 /* FPSOverlay.swift */,
 				A2000004 /* JITAllocator.c */,
 				A2000005 /* JITAllocator.h */,
-				A200000B /* FEXBridge.mm */,
-				A200000C /* FEXBridge.h */,
 				A200001E /* WineServerBridge.m */,
 				A200001F /* WineServerBridge.h */,
 				A2000030 /* WineProcessBridge.m */,
@@ -227,14 +201,7 @@
 		A4000004 /* Libraries */ = {
 			isa = PBXGroup;
 			children = (
-				A2000010 /* libFEXCore.a */,
-				A2000011 /* libFEXCore_Base.a */,
-				A2000012 /* libfmt.a */,
-				A2000013 /* libcephes_128bit.a */,
-				A2000014 /* libxxhash.a */,
-				A2000015 /* libsoftfloat_3e.a */,
 				A2000016 /* libc++.tbd */,
-				A2000017 /* libJemallocLibs.a */,
 				A2000020 /* libwineserver.a */,
 				A2000032 /* libntdll_unix.a */,
 				A2000035 /* IOKit.framework */,
@@ -362,7 +329,6 @@
 				A1000202 /* FPSOverlay.swift in Sources */,
 				A1000004 /* JITAllocator.c in Sources */,
 				A1000005 /* EntitlementChecker.swift in Sources */,
-				A1000006 /* FEXBridge.mm in Sources */,
 				A1000020 /* WineServerBridge.m in Sources */,
 				A1000030 /* WineProcessBridge.m in Sources */,
 				A1000033 /* wine_stubs.c in Sources */,

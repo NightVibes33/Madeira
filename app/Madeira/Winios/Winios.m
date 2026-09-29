@@ -600,6 +600,11 @@ static CALayer *g_desk_bg;               /* teal desktop-area backdrop */
 static CGFloat g_px_to_pt = 1.0 / 3.0;   /* desktop px → screen pt */
 static CGPoint g_desk_origin;            /* desktop (0,0) in view pt (letterbox offset) */
 static CGRect g_comp_frame;              /* presentation area (window coords), from Swift */
+static unsigned long long g_visible_surface_present_count; /* large Steam/CEF GDI presents */
+
+unsigned long long winios_get_surface_present_count(void) {
+    return __atomic_load_n(&g_visible_surface_present_count, __ATOMIC_RELAXED);
+}
 static BOOL g_comp_frame_set;
 
 static CGRect winios_layer_rect(int x, int y, int w, int h) {
@@ -1004,6 +1009,13 @@ int winios_surface_present(HWND hwnd, int dx, int dy, int dw, int dh,
      * wants. Ownership now belongs to `data` and, through it, to every CGImage
      * CoreGraphics builds from it. */
     NSData *data = [NSData dataWithBytesNoCopy:snap length:snap_len freeWhenDone:YES];
+
+    /* Product readiness: Steam/CEF is a GDI/compositor path, not necessarily a
+     * DXMT swapchain. Count only substantial surfaces so a tiny helper/tooltip
+     * cannot dismiss the native startup state before real Steam pixels exist. */
+    if (sw >= 400 && sh >= 300)
+        __atomic_add_fetch(&g_visible_surface_present_count, 1, __ATOMIC_RELAXED);
+
     static int dumpSurf = -1;
     if (dumpSurf < 0) dumpSurf = getenv("MADEIRA_DUMP_SURFACES") != NULL;
     /* ml537: complete an armed src/surface pair with the FIRST present after the

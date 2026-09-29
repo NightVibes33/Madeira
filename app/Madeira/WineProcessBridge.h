@@ -4,6 +4,9 @@
 extern "C" {
 #endif
 
+// Seed/repair the bundled Wine prefix before wineserver or a first-run installer.
+void madeira_seed_prefix_if_needed(const char *prefix_path);
+
 // Start Wine process initialization on a background thread.
 // Must be called AFTER wineserver is running.
 // prefix_path: path to the Wine prefix directory

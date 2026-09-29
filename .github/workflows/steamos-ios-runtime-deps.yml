@@ -1,0 +1,93 @@
+name: SteamOS-iOS runtime dependency gates
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-runtime-deps.yml"
+      - "build/gnutls-ios/**"
+      - "build/freetype-ios/**"
+      - "tools/runtime-deps/fetch-freetype.sh"
+      - "tools/runtime-deps/fetch-vcruntime.sh"
+      - "docs/STEAMOS_IOS_BASELINE.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-runtime-deps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  crypto-ios:
+    name: clean GnuTLS stack for iOS
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tracked source archives
+        run: |
+          set -euo pipefail
+          cd build/gnutls-ios/src
+          shasum -a 256 -c SHA256SUMS
+
+      - name: Build GMP + Nettle/Hogweed + GnuTLS
+        run: bash build/gnutls-ios/build.sh
+
+      - name: Verify static archives
+        run: |
+          set -euo pipefail
+          for a in libgmp.a libnettle.a libhogweed.a libgnutls.a; do
+            test -s "toolchains/gnutls-ios/lib/$a"
+            lipo -info "toolchains/gnutls-ios/lib/$a"
+          done
+          echo "GNUTLS_IOS_CLEAN_BUILD_OK"
+
+  freetype-ios:
+    name: clean FreeType for iOS
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize exact FreeType 2.13.3 commit
+        run: bash tools/runtime-deps/fetch-freetype.sh
+
+      - name: Build FreeType
+        run: bash build/freetype-ios/build.sh
+
+      - name: Verify static archive
+        run: |
+          set -euo pipefail
+          test -s build/freetype-ios/build/libfreetype.a
+          lipo -info build/freetype-ios/build/libfreetype.a
+          test "$(git -C research/freetype rev-parse HEAD)" = "42608f77f20749dd6ddc9e0536788eaad70ea4b5"
+          echo "FREETYPE_IOS_CLEAN_BUILD_OK"
+
+  vcruntime-x64:
+    name: pinned Microsoft VC++ x64 runtime extraction
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install archive tool
+        run: brew install sevenzip
+
+      - name: Fetch and verify pinned Microsoft x64 VC runtime
+        run: bash tools/runtime-deps/fetch-vcruntime.sh
+
+      - name: Verify exact runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find app/Madeira/x86_64-vcruntime -maxdepth 1 -type f -name '*.dll' | wc -l | tr -d ' ')" = "12"
+          python3 - app/Madeira/x86_64-vcruntime/*.dll <<'PY'
+          import pathlib, struct, sys
+          for p in map(pathlib.Path, sys.argv[1:]):
+              d = p.read_bytes()
+              pe = struct.unpack_from("<I", d, 0x3c)[0]
+              machine = struct.unpack_from("<H", d, pe + 4)[0]
+              if machine != 0x8664:
+                  raise SystemExit(f"{p}: expected AMD64 machine 0x8664, got 0x{machine:04x}")
+          print("VCRUNTIME_X64_CLEAN_FETCH_OK files=12")
+          PY

@@ -41,6 +41,9 @@ compile_one() {
         SUCCEEDED=$((SUCCEEDED + 1))
     else
         echo "FAILED"
+        echo "----- $name compiler diagnostics -----" >&2
+        sed -n '1,240p' "$OBJ_DIR/$name.err" >&2 || true
+        echo "----- end $name diagnostics -----" >&2
         FAILED=$((FAILED + 1))
         FAILED_FILES="$FAILED_FILES $name"
     fi
@@ -76,6 +79,9 @@ compile_unixlib() {
         SUCCEEDED=$((SUCCEEDED + 1))
     else
         echo "FAILED"
+        echo "----- $name compiler diagnostics -----" >&2
+        sed -n '1,240p' "$OBJ_DIR/$name.err" >&2 || true
+        echo "----- end $name diagnostics -----" >&2
         FAILED=$((FAILED + 1))
         FAILED_FILES="$FAILED_FILES $name"
     fi
@@ -155,7 +161,9 @@ done
 echo ""
 echo "Results: $SUCCEEDED succeeded, $FAILED failed"
 if [ -n "$FAILED_FILES" ]; then
-    echo "Failed:$FAILED_FILES"
+    echo "Failed:$FAILED_FILES" >&2
+    echo "Refusing to archive an incomplete libntdll_unix.a" >&2
+    exit 1
 fi
 
 echo ""

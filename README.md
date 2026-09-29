@@ -7,6 +7,20 @@ Madeira combines [Wine](https://www.winehq.org/) (ARM64EC),
 [DXMT](https://github.com/3Shain/DXMT) for D3D11 → Metal, running as a single
 Mach process on iOS with wineserver as a thread rather than a separate process.
 
+
+## SteamOS-iOS Windows-first runtime
+
+The `steamos-ios` branch runs the real Windows Steam client through Madeira's
+Wine ARM64EC/WoW64 + FEX stack. It does not boot Linux/Windows in a VM and does
+not use remote streaming as the execution engine. First run downloads Valve's
+official Windows Steam installer; Steam then installs games into the app-owned
+Wine storage and launches supported Windows titles locally.
+
+The Metal host is device-aware: iPhone uses a 720-line logical desktop matched
+to the phone's wide aspect, while iPad uses a 900-line desktop matched to the
+tablet aspect. The image is aspect-fit rather than stretched and touch input is
+mapped through the same transform.
+
 ## Status
 
 Thumper and ULTRAKILL are playable. Marvel Cosmic Invasion has reached

@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MadeiraApp: App {
+struct SteamOSiOSApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

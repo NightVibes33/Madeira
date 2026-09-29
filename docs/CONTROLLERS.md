@@ -98,3 +98,28 @@ merge, rebuild the paired components and test:
 - Both rollback flags, saved layouts, and existing keyboard/mouse controls.
 
 The fork's existing device history does not prove this isolated extraction.
+
+
+## Shipping mobile controller policy
+
+The controller overlay is optional and defaults off. Normal gameplay contains
+no pencil/editor button or permanent controller toolbar. The user opens native
+**Steam Settings** with a three-finger tap, enables the controller there, and
+enters **Edit Controller Layout** from Settings. Edit mode temporarily exposes
+Done/Add controls; leaving edit mode removes that chrome again.
+
+The built-in default layout includes LS/RS, L3/R3, D-pad, A/B/X/Y, LB/RB,
+LT/RT, View/Menu/Guide. If a saved layout is empty, enabling or editing the
+controller seeds the default; Reset Layout restores it.
+
+The controller is hosted in a UIWindow above the window-hosted CAMetalLayer.
+When Steam Settings is presented, both the Metal host and controller UIWindow
+are hidden so neither can cover or steal touches from the native Settings sheet.
+
+Full-screen touch is independent from the optional controller:
+- Direct Touch maps the primary finger to the exact aspect-fitted guest surface.
+- Mouse/Trackpad supplies cursor movement, click, long-press drag,
+  two-finger scroll and two-finger right-click.
+- Relative mouse-look supplies FPS-style mouse deltas.
+- Three-finger tap is reserved for opening Steam Settings even when the
+  controller is hidden.

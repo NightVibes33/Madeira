@@ -28,7 +28,6 @@
 #include "WineProcessBridge.h"
 #include "WineServerBridge.h"
 #include "PrefixExtractor.h"
-#include "FEXBridge.h"  // fex_get_jit_write_offset()
 
 // Thread-local globals for wine_ios_exit longjmp (used by wine_ios_exit.h shim in ntdll)
 // Each Wine "process" thread has its own jmpbuf so child processes can exit independently.
@@ -833,44 +832,57 @@ static void *wine_process_thread(void *arg) {
          * is the pure branch-feeder) or a writer-side fix. Healer stays
          * opt-in-off. */
 
-        /* Steam game vars. One title reads SteamAppPath as its asset base path and
-         * queries it dozens of times during init, so it must be present before that
-         * title starts.
+        /* Steam identity policy for SteamOS-iOS.
          *
-         * KNOWN DEFECT, deliberately left in place for now: this publishes ONE title's
-         * identity to EVERY guest, with overwrite=1. A different title that links a Steam
-         * wrapper therefore sees the wrong app ID. Removing it outright was tested and is
-         * NOT the fix -- it regresses the title that needs the path, and it did not change
-         * the behaviour of the title that was mis-identified, so the mismatch is real but
-         * was not the failure being chased.
+         * Never publish one title's AppID to every guest. Real Steam is the authority
+         * for Steam-launched children and must be free to construct each game's own
+         * environment. Standalone regression buttons may request an explicit one-shot
+         * identity through MADEIRA_STEAM_APP_PATH / MADEIRA_STEAM_APP_ID.
          *
-         * The durable design belongs in the title-launch layer: publish nothing by
-         * default, take the ID from explicit title metadata or the game's own
-         * steam_appid.txt, set SteamAppPath to that game's directory, and give each child
-         * its own environment rather than mutating one process-global set shared by every
-         * pseudo-process. This path usually launches explorer.exe and cannot know which
-         * title the desktop will start later, so a conditional here cannot work. */
-        setenv("SteamAppPath", "C:\\Program Files\\Thumper", 1);
-        setenv("SteamGameId", "356400", 1);
-        setenv("SteamAppId",  "356400", 1);
-
-        /* iOS-Madeira 2026-07-02: publish the TRUE JIT-pool RX->RW offset to
-         * xtajit64.dll (its own FEXCore copy reads this via getenv in
-         * ProcessInit). Set HERE — beside SteamAppPath, the point where
-         * Wine snapshots the environment — so it forwards reliably; setting
-         * it in FEXBridge.mm::jit_pool_init was too early and did not reach
-         * Wine's GetEnvironmentVariableW. jit_pool_init has already run by
-         * now (fex_initialize is a prerequisite for launching the guest),
-         * so the offset is available. */
+         * These host-only override variables are consumed here and immediately cleared,
+         * so they cannot leak into a later Steam session in the same iOS process. */
         {
-            int64_t jit_off = fex_get_jit_write_offset();
-            if (jit_off != 0) {
-                char off_str[32];
-                snprintf(off_str, sizeof(off_str), "0x%llx", (unsigned long long)jit_off);
-                setenv("MADEIRA_JIT_WRITE_OFFSET", off_str, 1);
-                LOG("setenv MADEIRA_JIT_WRITE_OFFSET=%{public}s", off_str);
-            } else {
-                LOG("WARNING: fex_get_jit_write_offset() returned 0 — JIT pool not initialized?");
+            const char *steam_path_override = getenv("MADEIRA_STEAM_APP_PATH");
+            const char *steam_id_override = getenv("MADEIRA_STEAM_APP_ID");
+
+            if (steam_path_override && *steam_path_override)
+                setenv("SteamAppPath", steam_path_override, 1);
+            else
+                unsetenv("SteamAppPath");
+
+            if (steam_id_override && *steam_id_override)
+            {
+                setenv("SteamGameId", steam_id_override, 1);
+                setenv("SteamAppId", steam_id_override, 1);
+            }
+            else
+            {
+                unsetenv("SteamGameId");
+                unsetenv("SteamAppId");
+            }
+
+            unsetenv("MADEIRA_STEAM_APP_PATH");
+            unsetenv("MADEIRA_STEAM_APP_ID");
+        }
+
+        /* The Windows FEX/xtajit runtime derives DualMap::WriteOffset directly
+         * from WINE_IOS_JIT_RW - WINE_IOS_JIT_RX. Those variables are published
+         * from ContentView immediately after StikJITHelper creates the REAL
+         * large Wine/Steam pool. Do not substitute the native FEXBridge smoke
+         * pool here: it is a separate allocation with an unrelated alias offset. */
+        {
+            const char *jit_rx = getenv("WINE_IOS_JIT_RX");
+            const char *jit_rw = getenv("WINE_IOS_JIT_RW");
+            const char *jit_sz = getenv("WINE_IOS_JIT_SIZE");
+            if (!jit_rx || !*jit_rx || !jit_rw || !*jit_rw || !jit_sz || !*jit_sz)
+            {
+                LOG("FATAL: real Wine JIT pool environment missing (RX=%{public}s RW=%{public}s SIZE=%{public}s)",
+                    jit_rx ? jit_rx : "(null)", jit_rw ? jit_rw : "(null)", jit_sz ? jit_sz : "(null)");
+            }
+            else
+            {
+                LOG("Wine/xtajit JIT pool env ready: RX=%{public}s RW=%{public}s SIZE=%{public}s",
+                    jit_rx, jit_rw, jit_sz);
             }
         }
 

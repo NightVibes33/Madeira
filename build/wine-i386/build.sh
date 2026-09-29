@@ -28,7 +28,7 @@
 set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
+TC="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin"
 export PATH="$TC:$PATH"
 B="$R/wine/build-i386"
 DEST="$R/app/Madeira/i386-windows"
@@ -38,6 +38,41 @@ OBJDUMP="$TC/llvm-objdump"
 LOG="$B/madeira-i386-build.log"
 
 [ -x "$STRIP" ] || { echo "llvm-mingw not found at $TC (docs/BUILDING.md)" >&2; exit 1; }
+
+
+# Pinned DXMT + llvm-mingw 23 compatibility.
+# Newer libc++/MinGW headers no longer expose std::equal_to or
+# std::back_inserter through unrelated transitive includes. Keep the pinned
+# DXMT commit immutable and patch only the materialized checkout.
+D="$R/research/dxmt"
+SHA1_HPP="$D/src/util/sha1/sha1_util.hpp"
+FTL_HPP="$D/include/ftl.hpp"
+if [ -z "${SKIP_DXMT:-}" ] && [ $# -eq 0 ]; then
+    if ! grep -Fq "#include <functional>" "$SHA1_HPP"; then
+        python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); lines=p.read_text().splitlines(); i=lines.index("#include <cstdint>"); lines.insert(i, "#include <functional>"); p.write_text(chr(10).join(lines)+chr(10))' "$SHA1_HPP"
+    fi
+    if ! grep -Fq "#include <iterator>" "$FTL_HPP"; then
+        python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); lines=p.read_text().splitlines(); i=lines.index("#include <algorithm>"); lines.insert(i + 1, "#include <iterator>"); p.write_text(chr(10).join(lines)+chr(10))' "$FTL_HPP"
+    fi
+
+    grep -Fq "#include <functional>" "$SHA1_HPP"
+    grep -Fq "#include <iterator>" "$FTL_HPP"
+
+    PROBE_OBJ="${TMPDIR:-/tmp}/dxmt-i386-compat-${PPID}"
+    "$TC/i686-w64-mingw32-clang++" -std=c++20 -O0 -D_WIN32_WINNT=0xa00 \
+        -I"$D/src/util" -I"$D/include" -I"$D/libs" \
+        -c "$D/src/util/sha1/sha1_util.cpp" -o "$PROBE_OBJ.sha1.obj"
+
+    cat > "$PROBE_OBJ.ftl.cpp" <<'CPP'
+#include "ftl.hpp"
+int main() { return 0; }
+CPP
+    "$TC/i686-w64-mingw32-clang++" -std=c++20 -O0 -I"$D/include" \
+        -c "$PROBE_OBJ.ftl.cpp" -o "$PROBE_OBJ.ftl.obj"
+    rm -f "$PROBE_OBJ.sha1.obj" "$PROBE_OBJ.ftl.obj" "$PROBE_OBJ.ftl.cpp"
+    echo "DXMT_I386_SHA1_COMPAT_OK"
+    echo "DXMT_I386_FTL_COMPAT_OK"
+fi
 
 # ---------------------------------------------------------------- configure
 # Its own tree, like build-arm64ec: reconfiguring build-macos with an extra
@@ -171,3 +206,8 @@ for f in "$DEST"/*; do
     done < <("$OBJDUMP" -p "$f" 2>/dev/null | sed -n 's/^ *DLL Name: //p')
 done
 echo "== $(ls "$DEST" | wc -l | tr -d ' ') files in app/Madeira/i386-windows, $missing missing imports =="
+if [ "$missing" -ne 0 ]; then
+    echo "i386 import closure FAILED: $missing unresolved imports" >&2
+    exit 1
+fi
+echo "i386 import closure OK"

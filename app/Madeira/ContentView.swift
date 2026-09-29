@@ -4,6 +4,97 @@ import QuartzCore
 import Metal
 import os.log
 
+extension Notification.Name {
+    static let steamOSSettingsRequested = Notification.Name("SteamOS-iOS.SettingsRequested")
+}
+
+/// Shared logical-resolution and presentation policy for Windows Steam/games.
+private enum SteamOSDisplayProfile {
+    static func preferredDesktopSize() -> (width: Int, height: Int) {
+        let native = UIScreen.main.nativeBounds.size
+        let longEdge = max(native.width, native.height)
+        let shortEdge = max(min(native.width, native.height), 1)
+        let aspect = longEdge / shortEdge
+
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let height = isPad ? 900 : 720
+        let minWidth = isPad ? 1024 : 1152
+        let maxWidth = isPad ? 1440 : 1600
+        var width = Int((CGFloat(height) * aspect).rounded())
+        width = min(max(width, minWidth), maxWidth)
+        width = ((width + 7) / 8) * 8
+        return (width, height)
+    }
+
+    static func defaultGuestSize() -> CGSize {
+        let d = preferredDesktopSize()
+        return CGSize(width: d.width, height: d.height)
+    }
+
+    static func activeGuestSize() -> CGSize {
+        let fallback = defaultGuestSize()
+        func envDimension(_ name: String, fallback: CGFloat) -> CGFloat {
+            guard let raw = getenv(name),
+                  let parsed = Double(String(cString: raw)),
+                  parsed >= 64 else { return fallback }
+            return CGFloat(parsed)
+        }
+        return CGSize(
+            width: envDimension("MADEIRA_SCREEN_W", fallback: fallback.width),
+            height: envDimension("MADEIRA_SCREEN_H", fallback: fallback.height)
+        )
+    }
+}
+
+
+/// Product runtime gate: Steam/game execution is local-only and requires both
+/// executable JIT capability and a real Apple Metal device.
+private enum SteamOSRuntimeGate {
+    private static var executableJITProven = false
+
+    static func validate(log: LogStore) -> Bool {
+        guard jit_check_debugged() else {
+            log.log("[JIT] NOT READY — attach StikDebug/JIT before launching Steam or a game.", level: .error)
+            return false
+        }
+
+        // CS_DEBUGGED alone is not enough. Prove that this process can write
+        // generated ARM64 code through the RW alias and execute it through the
+        // RX alias. jit_test_execute() must return the sentinel value 42.
+        if !executableJITProven {
+            let probe = jit_test_execute()
+            guard probe == 42 else {
+                log.log("[JIT] EXECUTION PROBE FAILED (result \(probe)) — refusing to start Wine/FEX.", level: .error)
+                return false
+            }
+            executableJITProven = true
+        }
+
+        guard let gpu = MTLCreateSystemDefaultDevice() else {
+            log.log("[METAL] NO LOCAL GPU — refusing to start the Windows runtime.", level: .error)
+            return false
+        }
+
+        // The product path is always local. Madeira's historical remote-Metal
+        // research transport must never become the execution engine.
+        unsetenv("DXMT_REMOTE_METAL")
+        unsetenv("RMETAL_TOKEN")
+        unsetenv("DXMT_REMOTE_BATCH")
+        setenv("STEAMOS_IOS_LOCAL_METAL", "1", 1)
+
+        let maxTG = gpu.maxThreadsPerThreadgroup
+        log.log("[JIT] READY — executable probe returned 42.", level: .success)
+        log.log("[METAL] LOCAL GPU READY — \(gpu.name), max threads/group "
+                + "\(maxTG.width)x\(maxTG.height)x\(maxTG.depth)", level: .success)
+
+        // Rebind the process-lifetime presentation layer to the verified local
+        // device. DXMT/D3D12 still own drawable contents and drawableSize.
+        MetalHostView.shared.metalLayer.device = gpu
+        return true
+    }
+}
+
+
 // 2026-07-03 window-hosted Metal layer.
 //
 // The presenting CAMetalLayer must NOT be a SwiftUI-hosted view's backing
@@ -96,6 +187,17 @@ final class MetalBackedView: UIView {
         else { v.becomeFirstResponder() }
     }
 
+    /// Mobile lifecycle repair: after background/foreground transitions UIKit
+    /// can restore the window before it has issued a fresh layout pass to the
+    /// raw Metal host. Force the live placeholder to recompute the exact
+    /// aspect-fit frame used by both presentation and touchscreen mapping.
+    @MainActor
+    static func refreshPresentationGeometry() {
+        guard let v = keyboardTarget else { return }
+        v.setNeedsLayout()
+        v.layoutIfNeeded()
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         GamepadEventClaim.install(on: self)
@@ -122,16 +224,31 @@ final class MetalBackedView: UIView {
     // ~1 FPS content mostly doesn't. Resolution path: raise game FPS (perf
     // work), with a steady-rate re-present in DXMT as fallback insurance.
 
-    /// Largest 4:3 rect (the 1024×768 logical surface's aspect) that fits
-    /// centered in our bounds. The window-level host view gets THIS frame,
-    /// not our full bounds — otherwise landscape stretches the game to the
-    /// display edges (2026-07-05). Touch mapping uses the same rect so
-    /// letterboxing never skews input.
+    /// Aspect-fit the current Windows guest surface into the actual iOS/iPadOS
+    /// view. SteamOS-iOS no longer assumes the old 1024×768 Madeira test
+    /// surface: MADEIRA_SCREEN_W/H describe the active Windows desktop/game
+    /// target and the CAMetalLayer frame follows that aspect on every layout.
+    private func guestSize() -> CGSize {
+        SteamOSDisplayProfile.activeGuestSize()
+    }
+
     private func gameRect() -> CGRect {
-        let gw: CGFloat = 1024, gh: CGFloat = 768
-        let scale = min(bounds.width / gw, bounds.height / gh)
-        let w = gw * scale, h = gh * scale
-        return CGRect(x: (bounds.width - w) / 2, y: (bounds.height - h) / 2,
+        let guest = guestSize()
+
+        var container = bounds
+        if let window, bounds.height >= window.bounds.height * 0.80 {
+            let insets = window.safeAreaInsets
+            container = bounds.inset(by: UIEdgeInsets(
+                top: insets.top, left: insets.left,
+                bottom: insets.bottom, right: insets.right))
+        }
+
+        let scale = min(container.width / guest.width,
+                        container.height / guest.height)
+        let w = guest.width * scale
+        let h = guest.height * scale
+        return CGRect(x: container.midX - w / 2,
+                      y: container.midY - h / 2,
                       width: max(w, 1), height: max(h, 1))
     }
 
@@ -178,15 +295,18 @@ final class MetalBackedView: UIView {
         }
     }
 
-    // Map touch point in view-local UI points to the 1024×768 logical
-    // surface DXMT swapchains use, then post to winios.drv. Coordinates
-    // are relative to the aspect-fit gameRect (letterbox borders clamp).
+    // Map touch points through the SAME aspect-fit rectangle used by Metal.
+    // This keeps clicks/trackpad input pixel-aligned on wide iPhones and 4:3
+    // iPads instead of applying the old fixed 1024×768 transform.
     private func mapTouch(_ touch: UITouch) -> (Int32, Int32) {
         let p = touch.location(in: self)
         let r = gameRect()
-        let x = Int32(min(max((p.x - r.minX) * 1024 / r.width, 0), 1023))
-        let y = Int32(min(max((p.y - r.minY) * 768 / r.height, 0), 767))
-        return (x, y)
+        let guest = guestSize()
+        let maxX = max(Int32(guest.width) - 1, 0)
+        let maxY = max(Int32(guest.height) - 1, 0)
+        let x = Int32(min(max((p.x - r.minX) * guest.width / r.width, 0), guest.width - 1))
+        let y = Int32(min(max((p.y - r.minY) * guest.height / r.height, 0), guest.height - 1))
+        return (min(x, maxX), min(y, maxY))
     }
 
     // ==================================================================
@@ -200,7 +320,10 @@ final class MetalBackedView: UIView {
     // Cursor position lives here (desktop px); wine + the rendered arrow
     // follow via winios_pointer / winios_cursor_move.
     // ==================================================================
-    private static var cursor = CGPoint(x: 480, y: 270)
+    private static var cursor: CGPoint = {
+        let s = SteamOSDisplayProfile.defaultGuestSize()
+        return CGPoint(x: s.width / 2, y: s.height / 2)
+    }()
     private var lastPanPoint = CGPoint.zero
     private var touchStartPoint = CGPoint.zero
     private var touchStartTime: TimeInterval = 0
@@ -219,6 +342,8 @@ final class MetalBackedView: UIView {
     // simply do nothing.
     private var relCarryX: CGFloat = 0
     private var relCarryY: CGFloat = 0
+    private weak var directTouchOwner: UITouch?
+    private var settingsGestureActive = false
 
     private let F_MOVE: UInt32 = 0x1, F_LDOWN: UInt32 = 0x2, F_LUP: UInt32 = 0x4
     private let F_RDOWN: UInt32 = 0x8, F_RUP: UInt32 = 0x10
@@ -246,14 +371,42 @@ final class MetalBackedView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard desktopMode else {
-            guard let t = touches.first else { return }
+        let active = activeTouches(event)
+
+        // Three-finger tap opens SteamOS-iOS settings with no permanent HUD
+        // button. Cancel any primary Windows touch first so the gesture cannot
+        // leave a stuck pointer/button in Steam or a running game.
+        if active.count >= 3 {
+            settingsGestureActive = true
+            touchGeneration += 1
+            if let owner = directTouchOwner {
+                let (x, y) = mapTouch(owner)
+                winios_post_touch_up(x, y)
+                directTouchOwner = nil
+            }
+            if dragActive { postPointer(F_LUP); dragActive = false; dragTouch = nil }
+            twoFingerActive = false
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .steamOSSettingsRequested, object: nil)
+            }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            return
+        }
+
+        guard InputSettings.shared.touchScreenEnabled else { return }
+
+        // Direct Touch is literal finger-to-Windows-surface input. The current
+        // winios bridge exposes one absolute Windows pointer, so keep a stable
+        // primary finger while other fingers remain available to the separate
+        // virtual-controller UIWindow.
+        if InputSettings.shared.directTouch || !desktopMode {
+            guard directTouchOwner == nil, let t = touches.first else { return }
+            directTouchOwner = t
             let (x, y) = mapTouch(t)
             winios_post_touch_down(x, y)
             return
         }
         let now = Date().timeIntervalSinceReferenceDate
-        let active = activeTouches(event)
         touchGeneration += 1
         if active.count >= 2 {
             twoFingerActive = true
@@ -290,8 +443,11 @@ final class MetalBackedView: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard desktopMode else {
-            guard let t = touches.first else { return }
+        if settingsGestureActive { return }
+        guard InputSettings.shared.touchScreenEnabled else { return }
+
+        if InputSettings.shared.directTouch || !desktopMode {
+            guard let t = directTouchOwner, touches.contains(t) else { return }
             let (x, y) = mapTouch(t)
             winios_post_touch_move(x, y)
             return
@@ -358,18 +514,26 @@ final class MetalBackedView: UIView {
         }
 
         let sens = CGFloat(InputSettings.shared.sensAbs)   // desktop px per view pt
-        let maxX = CGFloat(envInt("MADEIRA_SCREEN_W", 1024) - 1)
-        let maxY = CGFloat(envInt("MADEIRA_SCREEN_H", 768) - 1)
+        let fallback = SteamOSDisplayProfile.defaultGuestSize()
+        let maxX = CGFloat(envInt("MADEIRA_SCREEN_W", Int(fallback.width)) - 1)
+        let maxY = CGFloat(envInt("MADEIRA_SCREEN_H", Int(fallback.height)) - 1)
         Self.cursor.x = min(max(Self.cursor.x + dx * sens, 0), maxX)
         Self.cursor.y = min(max(Self.cursor.y + dy * sens, 0), maxY)
         postPointer(F_MOVE | F_ABS)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard desktopMode else {
-            guard let t = touches.first else { return }
+        if settingsGestureActive {
+            if activeTouches(event).isEmpty { settingsGestureActive = false }
+            return
+        }
+        guard InputSettings.shared.touchScreenEnabled else { return }
+
+        if InputSettings.shared.directTouch || !desktopMode {
+            guard let t = directTouchOwner, touches.contains(t) else { return }
             let (x, y) = mapTouch(t)
             winios_post_touch_up(x, y)
+            directTouchOwner = nil
             return
         }
         let now = Date().timeIntervalSinceReferenceDate
@@ -407,10 +571,22 @@ final class MetalBackedView: UIView {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard desktopMode else {
-            guard let t = touches.first else { return }
-            let (x, y) = mapTouch(t)
-            winios_post_touch_up(x, y)
+        if settingsGestureActive {
+            settingsGestureActive = false
+            directTouchOwner = nil
+            return
+        }
+        guard InputSettings.shared.touchScreenEnabled else {
+            directTouchOwner = nil
+            return
+        }
+
+        if InputSettings.shared.directTouch || !desktopMode {
+            if let t = directTouchOwner {
+                let (x, y) = mapTouch(t)
+                winios_post_touch_up(x, y)
+            }
+            directTouchOwner = nil
             return
         }
         fputs("[trackpad] CANCELLED (dragActive=\(dragActive))\n", stderr)
@@ -807,6 +983,15 @@ final class InputSettings: ObservableObject {
     @Published var relative: Bool  = false { didSet { save() } }
     @Published var sensAbs:  Double = 2.0  { didSet { save() } }
     @Published var sensRel:  Double = 2.0  { didSet { save() } }
+
+    /// Product input policy. Full-screen touch remains usable even when the
+    /// virtual controller overlay is hidden. Direct mode maps finger position
+    /// to the Windows surface; trackpad mode preserves Madeira's mouse-look /
+    /// scroll / right-click gestures.
+    @Published var touchScreenEnabled = true { didSet { save() } }
+    @Published var directTouch = true        { didSet { save() } }
+    @Published var controllerOverlayEnabled = false { didSet { save() } }
+
     /// ml649: heavy diagnostics. Default OFF so the shipped default is the fast
     /// path; flip it on only when a run needs to be explainable.
     @Published var diagnostics = false { didSet { madeira_set_diag_enabled(diagnostics ? 1 : 0); save() } }
@@ -828,6 +1013,9 @@ final class InputSettings: ObservableObject {
             relative = j["relative"] as? Bool   ?? false
             sensAbs  = j["sensAbs"]  as? Double ?? 2.0
             sensRel  = j["sensRel"]  as? Double ?? 2.0
+            touchScreenEnabled = j["touchScreenEnabled"] as? Bool ?? true
+            directTouch = j["directTouch"] as? Bool ?? true
+            controllerOverlayEnabled = j["controllerOverlayEnabled"] as? Bool ?? false
             diagnostics = j["diagnostics"] as? Bool ?? false
         }
         loading = false
@@ -836,7 +1024,15 @@ final class InputSettings: ObservableObject {
 
     private func save() {
         guard !loading else { return }
-        let j: [String: Any] = ["relative": relative, "sensAbs": sensAbs, "sensRel": sensRel, "diagnostics": diagnostics]
+        let j: [String: Any] = [
+            "relative": relative,
+            "sensAbs": sensAbs,
+            "sensRel": sensRel,
+            "touchScreenEnabled": touchScreenEnabled,
+            "directTouch": directTouch,
+            "controllerOverlayEnabled": controllerOverlayEnabled,
+            "diagnostics": diagnostics
+        ]
         guard let d = try? JSONSerialization.data(withJSONObject: j) else { return }
         try? d.write(to: Self.url, options: .atomic)
     }
@@ -856,9 +1052,20 @@ struct ContentView: View {
     @State private var debuggerAttached = isDebuggerAttached()
     @ObservedObject private var input = InputSettings.shared
     @State private var pointerPanel = false
+    @State private var steamSettingsPresented = false
+    @State private var didStartSteamProduct = false
+    @State private var presentBaseline = 0
+    @State private var compositorBaseline: UInt64 = 0
+    @State private var productState: ProductState = .startingJIT
     @Namespace private var pointerNS
-    /// .compact = iPhone landscape: game surface expands, arrow keys appear.
-    @Environment(\.verticalSizeClass) private var vSizeClass
+
+    private enum ProductState: Equatable {
+        case startingJIT
+        case installingSteam
+        case launchingSteam
+        case running
+        case failed(String)
+    }
 
     enum JITStatus {
         case unknown
@@ -869,34 +1076,179 @@ struct ContentView: View {
     }
 
     var body: some View {
-        /* ml658: was NavigationView, which is deprecated and — the reason this
-         * matters — defaults to a SPLIT VIEW on iPad. TARGETED_DEVICE_FAMILY is
-         * "1,2", so iPad is a shipping target, and the whole UI was being forced
-         * into a sidebar/detail arrangement it was never laid out for.
-         * NavigationStack is single-column on every device. Safe here: there are
-         * no NavigationLinks anywhere in the app, so nothing depended on the
-         * two-column selection behaviour. */
-        NavigationStack {
-            Group {
-                if vSizeClass == .compact {
-                    landscapeBody
-                } else {
-                    portraitBody
-                }
-            }
-            // Rotation destroys/recreates the UIViewRepresentable across
-            // this if/else (two SwiftUI identities) — HARMLESS since
-            // 2026-07-05: MetalHostView is a process-lifetime singleton;
-            // a fresh placeholder only re-parents the same CAMetalLayer.
-            .navigationTitle("Madeira")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarHidden(vSizeClass == .compact)
+        steamProductBody
             .onAppear {
                 jit_install_trap_handler()
-                entitlements = EntitlementStatus.check()
-                logEntitlementStatus()
+                TouchControlsHost.attach()
+                startSteamAutomatically()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIDevice.orientationDidChangeNotification)) { _ in
+                TouchControlsHost.attach()
+                MetalBackedView.refreshPresentationGeometry()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.didBecomeActiveNotification)) { _ in
+                // Re-attach window-level overlays and re-run the Metal/touch
+                // geometry transform after iOS restores the scene.
+                TouchControlsHost.attach()
+                MetalBackedView.refreshPresentationGeometry()
+                if productState == .running && !steamSettingsPresented {
+                    MetalHostView.shared.alpha = 1
+                    MetalHostView.shared.isHidden = false
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .steamOSSettingsRequested)) { _ in
+                steamSettingsPresented = true
+            }
+            .sheet(isPresented: $steamSettingsPresented) {
+                SteamSettingsView()
+            }
+            .onChange(of: steamSettingsPresented) { _, shown in
+                // MetalHostView is intentionally window-hosted above SwiftUI.
+                // Hide it while native settings are presented so the sheet can
+                // never be visually trapped underneath the game surface.
+                MetalHostView.shared.isHidden = shown
+                TouchControlsHost.setHidden(shown)
+                if !shown && productState == .running {
+                    MetalHostView.shared.isHidden = false
+                }
+            }
+            .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+                guard productState == .launchingSteam else { return }
+                let dxmtReady = Int(madeira_get_present_count()) > presentBaseline
+                let steamSurfaceReady = winios_get_surface_present_count() > compositorBaseline
+                if dxmtReady || steamSurfaceReady {
+                    productState = .running
+                    MetalHostView.shared.isHidden = steamSettingsPresented
+                    UIView.animate(withDuration: 0.20) {
+                        MetalHostView.shared.alpha = 1
+                    }
+                }
+            }
+    }
+
+    /// Shipping product root. Users see Steam startup/Steam itself, never the
+    /// Madeira diagnostics launcher. Engineering controls remain compiled below
+    /// for development but are not reachable through the normal root view.
+    private var steamProductBody: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            MadeiraMetalView().ignoresSafeArea()
+
+            if productState != .running {
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                    Text(productStatusTitle)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(productStatusDetail)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.68))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+
+                    if case .failed = productState {
+                        Button("Retry") {
+                            didStartSteamProduct = false
+                            startSteamAutomatically()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(24)
             }
         }
+        .background(Color.black)
+        .ignoresSafeArea()
+    }
+
+    private var productStatusTitle: String {
+        switch productState {
+        case .startingJIT: return "Starting Steam"
+        case .installingSteam: return "Installing Steam"
+        case .launchingSteam: return "Launching Steam"
+        case .running: return ""
+        case .failed: return "Steam could not start"
+        }
+    }
+
+    private var productStatusDetail: String {
+        switch productState {
+        case .startingJIT:
+            return "Preparing local x86/x64 JIT execution. StikDebug may open once."
+        case .installingSteam:
+            return "Downloading and installing Valve's Windows Steam client."
+        case .launchingSteam:
+            return "Starting Steam locally through Wine, FEX and Metal."
+        case .running:
+            return ""
+        case .failed(let message):
+            return message
+        }
+    }
+
+    @MainActor
+    private func startSteamAutomatically() {
+        guard !didStartSteamProduct else { return }
+        didStartSteamProduct = true
+        productState = .startingJIT
+        presentBaseline = Int(madeira_get_present_count())
+        compositorBaseline = winios_get_surface_present_count()
+        MetalHostView.shared.alpha = 0
+        MetalHostView.shared.isHidden = false
+
+        if jit_check_debugged() {
+            launchSteamProductRuntime()
+            return
+        }
+
+        StikJITHelper.enableJIT { success in
+            DispatchQueue.main.async {
+                if success {
+                    self.launchSteamProductRuntime()
+                } else {
+                    self.productState = .failed(
+                        "JIT is required for local Windows execution. Install/open StikDebug and retry.")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func launchSteamProductRuntime() {
+        unsetenv("MADEIRA_STEAM_APP_PATH")
+        unsetenv("MADEIRA_STEAM_APP_ID")
+
+        guard SteamOSRuntimeGate.validate(log: logStore) else {
+            productState = .failed("Local JIT/Metal runtime validation failed. Re-enable JIT and retry.")
+            return
+        }
+
+        let steamSize = preferredSteamDesktopSize()
+        let deskW = steamSize.width
+        let deskH = steamSize.height
+        logStore.log("Steam auto-start display target: \(deskW)x\(deskH)")
+
+        if !steamIsInstalled() {
+            productState = .installingSteam
+            Task { @MainActor in
+                await bootstrapSteamFirstRun(deskW: deskW, deskH: deskH)
+                if case .failed = self.productState { return }
+                self.productState = .launchingSteam
+            }
+            return
+        }
+
+        guard prepareSteamLaunch() else {
+            productState = .failed("The installed Steam runtime could not be prepared.")
+            return
+        }
+        configureSteamProductRuntime(batch: "steam-launch.bat", deskW: deskW, deskH: deskH)
+        productState = .launchingSteam
+        runWineFullSequence()
     }
 
     /// Portrait: classic tooling layout — header, badges, 240pt game strip,
@@ -967,30 +1319,16 @@ struct ContentView: View {
         }
     }
 
-    /// Landscape: game mode. Full-height 4:3 surface centered (aspect-fit
-    /// happens in MetalBackedView); ALL controls live in the pillarbox
-    /// bars left/right of the game — the window-level surface would cover
-    /// anything drawn over the game area itself. No header/log/nav chrome.
+    /// Landscape game/Steam mode. The placeholder fills the physical display;
+    /// MetalBackedView then aspect-fits the ACTIVE guest resolution. On a wide
+    /// iPhone the Windows surface is wide, so it fills the panel. On iPad the
+    /// chosen desktop is naturally close to 4:3. Touch controls live in their
+    /// own transparent UIWindow above the Metal host and use normalized
+    /// coordinates, so the same controller profile survives device changes.
     private var landscapeBody: some View {
-        GeometryReader { geo in
-            let gameW = min(geo.size.width, geo.size.height * 4.0 / 3.0)
-            let barW = max((geo.size.width - gameW) / 2.0, 44)
-            ZStack {
-                Color.black
-                MadeiraMetalView()
-                // Controls removed for now (ml586): game-only landscape.
-                // The FPS readout stays, pinned in the right pillarbox bar —
-                // the window-level surface covers anything drawn over the
-                // game area itself, so it cannot ride on the game view.
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    VStack {
-                        FPSOverlay(compact: true)
-                        Spacer()
-                    }
-                    .frame(width: barW)
-                }
-            }
+        ZStack {
+            Color.black
+            MadeiraMetalView()
         }
         .ignoresSafeArea()
         .background(Color.black)
@@ -1132,6 +1470,16 @@ struct ContentView: View {
         }
     }
 
+
+    /// Choose a performance-oriented Windows desktop that matches the physical
+    /// device aspect instead of forcing 4:3 everywhere. iPhone uses a 720-line
+    /// render target; iPad uses 900 lines. Both are deliberately below native
+    /// panel resolution so Steam/CEF and games do not pay Retina-resolution GPU
+    /// and memory cost just to fill the display.
+    private func preferredSteamDesktopSize() -> (width: Int, height: Int) {
+        SteamOSDisplayProfile.preferredDesktopSize()
+    }
+
     private var actionButtons: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
@@ -1140,269 +1488,43 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("Steam Testing") {
+                Button("Steam Settings") {
+                    steamSettingsPresented = true
+                }
+                .buttonStyle(.bordered)
+
+                Button("Steam") {
+                    // Real Steam owns AppID/game identity for every child it launches.
+                    // Clear any host-only standalone regression override before entering
+                    // the Steam client path.
+                    unsetenv("MADEIRA_STEAM_APP_PATH")
+                    unsetenv("MADEIRA_STEAM_APP_ID")
+
                     // Steam S3 first boot: virtual desktop (Steam needs a
                     // window manager) + services.exe (SCM → rpcss for Steam's
                     // COM, the chain proven in the rpcss milestone) + steam.exe
                     // itself, all launched by C:\steam-launch.bat (pushed to
                     // the prefix). Batch avoids quote-escaping hell; combase's
                     // 5s OpenSCManager retry covers the services-vs-steam race.
-                    // Steam install = CrossOver copy at C:\Program Files (x86)\
-                    // Steam (all boot binaries verified x86-64; steamwebhelper
-                    // /libcef = 209MB → watch pool: first webhelper may fit,
-                    // multiples need .text sharing). Flags: -no-cef-sandbox
-                    // (sandbox can't work in Wine), -cef-disable-gpu (software
-                    // render), -console (Steam's own log → our stderr). Steam
-                    // WILL try to self-update through our GnuTLS stack — that
-                    // attempt is itself an informative S0 re-test.
-                    let deskW = 1024, deskH = 768
-                    // ml589: find Steam and (re)write the launch batch. Returns
-                    // false — having logged why — when there is nothing to run.
+                    // First run: download Valve's official Windows SteamSetup.exe
+                    // into C:\ and execute it through Madeira's shipped WoW64 path
+                    // (wow64.dll + wow64win.dll + xtajit.dll). Later runs launch
+                    // the installed Steam client directly. CEF remains jitless
+                    // until its runtime-x86 JIT path is stable under FEX.
+                    let steamSize = preferredSteamDesktopSize()
+                    let deskW = steamSize.width, deskH = steamSize.height
+                    logStore.log("Steam display target: \(deskW)x\(deskH) for \(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone")")
+                    if !steamIsInstalled() {
+                        Task { @MainActor in
+                            await bootstrapSteamFirstRun(deskW: deskW, deskH: deskH)
+                        }
+                        return
+                    }
+                    // Installed path: regenerate C:\steam-launch.bat and launch
+                    // Steam inside the existing Madeira/Wine pseudo-process model.
                     guard prepareSteamLaunch() else { return }
-                    // ml590 STEP 1 (one-run phase check, NOT a timing measurement):
-                    // arm the ml578 sock-wire probe. It answers exactly one
-                    // question — does today's ~1s CM failure reach the same TLS
-                    // phase ml578 did (ServerHello -> client Finished -> server
-                    // encrypted records), or does it die earlier?
-                    //
-                    // Its numbers are NOT trustworthy as timings: no monotonic
-                    // clock, a getpeername() before EVERY send/recv even after the
-                    // 12-line budget is spent, and synchronous dprintf() on a path
-                    // whose whole ping budget is 1000ms — it perturbs what it
-                    // measures, which is why ml579 gated it off. Step 2 replaces it
-                    // with a per-socket timeline (cached peer, generation counter,
-                    // one line at close) that can be trusted for timing.
-                    //
-                    // COLD LAUNCH REQUIRED: ios_sock_wire() latches this env into a
-                    // static on its FIRST call (socket.c:842), so if any earlier
-                    // Wine session in this app process already touched a socket the
-                    // flag is stuck off. Force-quit, launch, press this first.
-                    // ml591: the phase question is ANSWERED, so the per-event
-                    // probe goes back off — it distorts the very budget step 2
-                    // measures. [sock-tl] replaces it and needs no env var.
-                    unsetenv("MADEIRA_SOCK_WIRE")
-                    // ml594 A/B: post-login hang = FEX optimizer NONTERMINATION.
-                    // Chrome_InProcRendererThread (wtid 0208) sampled 9x at
-                    // 97-100% CPU (cpu=277 -> 918, run=1) inside
-                    // DeadFlagCalculationEliminination::ProcessBlock while EVERY
-                    // other thread sat at cpu=0 and Steam presented ZERO further
-                    // frames. One CompileBlock entered that pass and never came
-                    // back, and the thread holds a fexlock read ref, so it can
-                    // stall other FEX threads too. NOT a network/cryptnet/wineserver
-                    // wait — our new guards never fired.
-                    //
-                    // FEX_O0 disables the default x87 + dead-flag passes
-                    // (FEXCore/Source/Interface/IR/PassManager.cpp:70). Slower, but
-                    // if the hang disappears the pass is convicted and the next step
-                    // is disabling ONLY CreateDeadFlagCalculationEliminination().
-                    // ml596: FEX_O0 has NEVER ACTUALLY BEEN TESTED, and my earlier
-                    // comment here blaming it for an execute fault was WRONG.
-                    // ml595 died because the JIT pool never existed: all three
-                    // placement attempts returned 0x7000000000 (the forbidden guest
-                    // 64G window), we logged "continuing without it", and Wine then
-                    // ran with `pool not initialised` -- so LdrInitializeThunk stayed
-                    // at its PE address 0x71ffd77654 instead of being redirected into
-                    // the pool (a healthy run logs `redirected PC 0x71ffd77654 ->
-                    // 0x12078f654`). The execute fault was the guaranteed consequence
-                    // of launching without the execution substrate, and pool placement
-                    // happens HERE in Swift before FEX reads any env var -- FEX_O0
-                    // cannot influence it. (Caught by Sol.)
-                    //
-                    // Convict the dead-flag pass with a targeted FEX build that
-                    // disables ONLY CreateDeadFlagCalculationEliminination(); broad O0
-                    // also drops the x87 pass and proves less. unsetenv keeps a stale
-                    // value from a previous launch out of play.
-                    unsetenv("FEX_O0")
-                    // ml597 A/B: remove ONLY DeadFlagCalculationEliminination, the pass
-                    // the renderer thread was pinned inside during the ml594 hang.
-                    // Everything else in the pipeline (incl. x87) stays exactly as in a
-                    // known-good run, so a result here implicates or clears this one pass.
-                    // The [dfe-guard] bounds ship active in BOTH arms — if the pass is
-                    // exonerated and the hang recurs, they still name the failure mode.
-                    // ml598 ISOLATION RUN: gate OFF, same rebuilt FEX.
-                    // ml597 crashed with c000001d (ILLEGAL INSTRUCTION) after the
-                    // desktop came up, but that run changed TWO things at once: my
-                    // DFE gate AND ~107 lines of FEX source committed today that had
-                    // never been built — the shipped xtajit64.dll dated Aug 6 while
-                    // Core.cpp/IosJitAlias.cpp/TSOHandlerConfig.h and a net rewrite of
-                    // WinAPI/IO.cpp were newer. Any of those can produce a
-                    // miscompilation-shaped fault, so ml597 convicts nothing.
-                    //   crashes again -> the REBUILD is at fault, DFE still untested
-                    //   runs fine     -> disabling DFE is what breaks it
-                    unsetenv("MADEIRA_NO_DFE")
-                    // ml599: name the pass that corrupts the IR list.
-                    //
-                    // ml598 settled the mechanism: FEX hangs walking a block
-                    // BACKWARDS because the intrusive Previous chain never reaches
-                    // CodeBegin. Two passes make that assumption —
-                    // DeadFlagCalculationEliminination::ProcessBlock and
-                    // ConstrainedRAPass::Run — and the store-page freeze was the
-                    // second one (PC pinned inside libarm64ecfex.dll RVA
-                    // 0x100b0c-0x100cdc, all within ConstrainedRAPass::Run, for
-                    // minutes at ~100% CPU while frames stayed at 4,114).
-                    //
-                    // Both now validate the block BEFORE touching it and repair the
-                    // Previous chain from the forward chain when that is intact, so
-                    // the hang should be gone either way. This var adds the sweep
-                    // that reports WHICH pass first breaks the list, so the run also
-                    // produces the root cause and not just the containment.
-                    // ml601: SWEEP OFF. Two runs checked 118M and 47M blocks and found
-                    // corruption exactly once (block 260, ml599b) — the after-every-pass
-                    // sweep is not earning its cost, and it taxes every large compile.
-                    // The unconditional parts STAY ON regardless of this variable: the
-                    // cheap backward check at DFE and RA entry, the repair, and the
-                    // bounded-walk guards. Only the attribution sweep is disabled.
-                    // Set it again for a run that is specifically hunting the corrupter.
-                    unsetenv("MADEIRA_IR_TOPO")
-                    // ml623: TARGETED IR/RA CAPTURE for the ULTRAKILL Mono wall.
-                    //
-                    // FEX miscompiles ONE instruction in Mono's x86-64 emitter:
-                    //   mono-2.0-bdwgc.dll+0x4db25b   mov byte ptr [rcx+2], al
-                    // With RCX=0x7040140010 (valid, a fresh RWX code buffer) and AL=0x4c,
-                    // it emitted `movz w6,#0x44 ; orr x8,x8,x6 ; dmb ish ; strb w8,[x6,xzr]`
-                    // -- the address register still held the IMMEDIATE because the
-                    // `add x6, x0, #2` that BOTH sibling branches emit was never generated,
-                    // so the store landed on 0x44.
-                    //
-                    // This prints that instruction's IR after the frontend and after every
-                    // pass, plus the emitted host bytes. The last stage at which the address
-                    // computation still exists names the culprit: frontend/decoder, a named
-                    // pass, RA liveness, or the ARM emitter.
-                    //
-                    // Compile-time only, capped at 4 captures. Unset it for a normal run.
-                    setenv("MADEIRA_IRCAP_RVA", "0x4db25b", 1)
-                    setenv("MADEIRA_IRCAP_MODULE", "mono-2.0-bdwgc.dll", 1)
-                    setenv("MADEIRA_EXE", "explorer.exe", 1)
-                    setenv("MADEIRA_ARGS",
-                           "/desktop=shell,\(deskW)x\(deskH) cmd /c C:\\steam-launch.bat", 1)
-                    setenv("MADEIRA_DESKTOP", "1", 1)
-                    setenv("MADEIRA_SCREEN_W", String(deskW), 1)
-                    setenv("MADEIRA_SCREEN_H", String(deskH), 1)
-                    // ml371: surfdump ground truth — the "frozen desktop"
-                    // question (fresh pixels never presented vs nothing
-                    // painting upstream) is undecidable from the log alone
-                    // because the [winios] present line caps at 12.
-                    // ml556: surface PNG dumping also off for the clean baseline —
-                    // it encodes a PNG on the present path. Restore "1" to re-enable.
-                    unsetenv("MADEIRA_DUMP_SURFACES")
-                    // ml493: bursts of N CONSECUTIVE frames per window. The
-                    // login window's black regions change every frame, which
-                    // the 2s-throttled first/latest dump can never show —
-                    // adjacent frames are the only way to measure what moves.
-                    setenv("MADEIRA_SURF_SEQ", "10", 1)
-                    // ml515: SRCWATCH RE-ENABLED, now hooked in the MACH
-                    // exception handler (where guest faults are actually
-                    // delivered) instead of segv_handler. It consumes its own
-                    // faults BEFORE every other classification and marks them
-                    // handled via the canonical thread_set_state path, so a
-                    // protection fault can no longer reach the guest as an AV.
-                    // ml514 hooked the wrong path: 0 faults, black window 2/2.
-                    /* ml530 (#78): srcwatch subject = the assembled steamui JS buffer, not the
-                     // render bitmap. "1" would mean the legacy render subject, and the
-                     // watch arms only ONCE — so with both call sites live, whichever ran
-                     // first would silently win and the other would never arm at all.
-                     //
-                     // Target: V8 reports `SyntaxError: Invalid or unexpected token` on
-                     // steamui JS that our file reads deliver byte-perfect (ml489: 73/73
-                     // MATCH, the failing file 100% verified through NtReadFile). That is
-                     // the DOMINANT Steam variance — 27 of 45 attempts stall right after
-                     // BrowserReady because the UI script never parses — and the same
-                     // corrupter family as the render glitch, so it buys both. */
-                    /* ml533: back to the RENDER subject — the js subject is structurally
-                    // blocked (the failing steamui files are read through a reused 64KB
-                    // chunk buffer, so no assembled buffer exists in our view). The render
-                    // watch now names the CALLER via the guest return address at [RSP],
-                    // which is what the block-granular RIP could never do. */
-                    // ml556 CLEAN-BASELINE TEST: srcwatch OFF.
-                    //
-                    // It write-protects the render bitmap and takes a Mach fault
-                    // per page ON THE RENDER HOT PATH, and the correlation across
-                    // this session is stark:
-                    //     attributions 1824/2370/426/2721 -> run dies at 36-52 s
-                    //     attributions 0/0/0              -> run reaches 94-106 s
-                    // Runs carrying our instrumentation die in roughly half the
-                    // time. Before attributing the crash to Steam or to FEX we owe
-                    // ourselves the one-variable control: does it still crash with
-                    // the probe off? Re-enable by restoring "render".
-                    // ml574: arm the dead-release detector in wineserver.
-                    // O(n) walk of object_list on every release_object — slow by
-                    // design, diagnostic only. Set to "0" to disarm.
-                    // ml579: DISABLED. It walks the global wineserver object list on
-                    // EVERY release_object() — O(n) in the single-threaded server. It
-                    // already caught the free_async_queue over-release (ml574) and that
-                    // fix is shipped; leaving the detector armed just starves the server,
-                    // and Steam allows each CM ping only 1000 ms. Set to "1" to re-arm.
-                    setenv("MADEIRA_DEAD_RELEASE", "0", 1)
-                    setenv("MADEIRA_SRCWATCH", "off", 1)
-                    // ml548: restrict srcwatch to the row band where displacement
-                    // was actually MEASURED, so the 400-attribution budget is not
-                    // spent on the full-frame clear (which touches every page
-                    // first and made the content painters invisible in ml517).
-                    // Band from ml543 frame 009: the Steam logo core landed at
-                    // (96,188) instead of (350,188) — exactly -254 px, one tile
-                    // pitch — so rows 150..230 bracket the displaced element.
-                    // ml550: was "150,230" — chosen for the SPLASH logo. On a
-                    // login-window run that band produced ZERO attributions
-                    // (426 on the splash run), because nothing painted there.
-                    // Widen to most of the surface so the watch follows whatever
-                    // the frame actually draws; the per-page budget still bounds
-                    // the fault cost.
-                    setenv("MADEIRA_SRCWATCH_ROWS", "0,400", 1)
-                    // ml527 (#82 RETEST, ONE VARIABLE): run V8 with its JIT on.
-                    //
-                    // ml526's phase timeline made the case concrete — of ~39s to
-                    // the login window, the single biggest block is 13.0s of
-                    // BrowserReady -> GetDesiredSteamUIWindows, i.e. Steam's UI
-                    // JavaScript booting, and interpreted V8 costs 5-20x there.
-                    //
-                    // #82 convicted jitless-off because both trial runs parked
-                    // CrBrowserMain shortly after BrowserReady (ml474b +104s,
-                    // ml475 +4s). ⚠️ Both ran with StikDebug attached and
-                    // spinning, when every trap was a round-trip to a starved
-                    // debugger — the overhead that made webhelper bring-up 89s
-                    // instead of 9s (b439be6). V8's JIT emits runtime x86, the
-                    // heaviest trap/compile workload in the process, so it is
-                    // exactly what that overhead punished worst. The verdict may
-                    // not survive early detach.
-                    //
-                    // ⛔ VERDICT (ml527, 2 runs): #82 SURVIVES early detach — jitless
-                    // stays ON. Both jitless-off runs died in the SAME window ml474b
-                    // and ml475 died in: right after BrowserReady, before
-                    // GetDesiredSteamUIWindows was ever reached (13:20:19 and
-                    // 13:22:45), so 4/4 across two completely different debugger
-                    // regimes. The failure MODE changed — a c0000005 ->
-                    // chrome_elf.dll+0xd4153 -> ffff7001 Crashpad termination rather
-                    // than #82's park in NtWaitForAlertByThreadId — but the window is
-                    // identical, and jitless-ON reaches the login window repeatedly
-                    // through that same window.
-                    //
-                    // No consolation prize either: BrowserReady took 12s and 10s with
-                    // the JIT on vs 8-11s (median 9s) with it off, because V8's JIT
-                    // emits runtime x86 that FEX must then compile. So the debugger
-                    // overhead was NOT what convicted jitless-off, and the 13s of
-                    // Steam UI JavaScript stays unmeasured — neither run survived to
-                    // reach it.
-                    //
-                    // Flip to "0" only alongside a fix for the post-BrowserReady death.
-                    setenv("MADEIRA_JITLESS", "1", 1)
-                    // ml514 note (kept for the record): The ml514 watch
-                    // armed correctly (76 pages protected) but logged ZERO
-                    // faults and produced an all-black window on two runs: the
-                    // hook went in the BSD segv_handler, while guest faults in
-                    // this port are handled IN-MACH by the exception server, so
-                    // the protection fault was delivered to the guest as an AV
-                    // and killed Chromium's paint. A probe must never break the
-                    // path it measures. To revive it, hook the Mach exception
-                    // server (where ios_emulate_unaligned_guest_access already
-                    // runs), not segv_handler, and re-enable this env var.
-                    // ml502 sentinel: DELIBERATELY NOT ENABLED. It stamps
-                    // magenta into currently-black pixels, and on windows
-                    // Chromium does not fully rewrite it SURVIVES and reaches
-                    // the screen (console 0x200bc hit untouched=177891 in one
-                    // round). It answered its question in ml503/ml504 —
-                    // untouched=0 on the login window proved Chromium writes
-                    // every pixel — so it must not ship enabled. Re-enable
-                    // with MADEIRA_SURF_SENTINEL=1 if the question returns.
+                    configureSteamProductRuntime(batch: "steam-launch.bat",
+                                                 deskW: deskW, deskH: deskH)
                     runWineFullSequence()
                 }
                 .buttonStyle(.borderedProminent)
@@ -1501,9 +1623,12 @@ struct ContentView: View {
                 .tint(.mint)
 
                 Button("Thumper (standalone)") {
-                    // Game lives at Documents/wine/drive_c/Program Files/Thumper/
-                    // (push via scripts/deploy-thumper.sh during development;
-                    // bundled as resource for distribution later).
+                    // Game lives at Documents/wine/drive_c/Program Files/Thumper/.
+                    // This standalone regression path needs the title identity that the
+                    // real Steam client would normally provide to its child process.
+                    // WineProcessBridge consumes these overrides once and clears them.
+                    setenv("MADEIRA_STEAM_APP_PATH", "C:\\Program Files\\Thumper", 1)
+                    setenv("MADEIRA_STEAM_APP_ID", "356400", 1)
                     setenv("MADEIRA_EXE",
                            "C:\\Program Files\\Thumper\\THUMPER_win10.exe", 1)
                     unsetenv("MADEIRA_ARGS")
@@ -1760,39 +1885,6 @@ struct ContentView: View {
         }
     }
 
-    private func runFEXTest() {
-        logStore.log("Starting FEX-Emu integration test...")
-        jitStatus = .testing
-
-        // Set up FEX log callback
-        fex_set_log_callback { msg in
-            if let msg = msg {
-                let str = String(cString: msg)
-                DispatchQueue.main.async {
-                    LogStore.shared.log(str, level: .debug)
-                }
-            }
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = fex_test_execute()
-
-            DispatchQueue.main.async {
-                switch result {
-                case 42:
-                    jitStatus = .available
-                    logStore.log("FEX-Emu test PASSED: x86-64 code returned 42!", level: .success)
-                case -1:
-                    jitStatus = .unavailable
-                    logStore.log("FEX-Emu test FAILED (init/setup error)", level: .error)
-                default:
-                    jitStatus = .unavailable
-                    logStore.log("FEX-Emu test returned \(result)", level: .error)
-                }
-            }
-        }
-    }
-
     private func enableJITViaStikDebug() {
         jitStatus = .testing
         logStore.log("Requesting JIT via StikDebug URL scheme...")
@@ -1812,8 +1904,8 @@ struct ContentView: View {
     /// Debugger stays attached during PE loading so mprotect_exec can use BRK
     /// to prepare code pages. Detach happens after Wine finishes + recovery.
     private func runWineFullSequence() {
-        guard jit_check_debugged() else {
-            logStore.log("JIT not enabled. Press 'Enable JIT' first.", level: .error)
+        guard SteamOSRuntimeGate.validate(log: logStore) else {
+            productState = .failed("Local JIT/Metal runtime validation failed before Windows launch.")
             return
         }
         /* ml1095: one config file. Written once from any legacy madeira-*.txt. */
@@ -2114,23 +2206,14 @@ struct ContentView: View {
                 }
             }
 
-            // ml762: remote Metal backend. Documents/madeira-remote.txt holds
-            // "<host-ip> <token>" and routes winemetal to a Metal daemon on that
-            // host instead of the local device. The mode is decided ONCE per
-            // process: flipping it later would leave handles from two address
-            // spaces alive at the same time, which is precisely what the handle
-            // tag exists to make impossible.
-            if let txt = MadeiraConfig.get("remote") {
-                let parts = txt.trimmingCharacters(in: .whitespacesAndNewlines)
-                                .split(separator: " ", maxSplits: 1).map(String.init)
-                if parts.count == 2 {
-                    setenv("DXMT_REMOTE_METAL", parts[0], 1)
-                    setenv("RMETAL_TOKEN", parts[1], 1)
-                    logStore.log("remote Metal: host=\(parts[0]) via madeira.cfg remote", level: .success)
-                } else if !parts.isEmpty {
-                    logStore.log("madeira.cfg remote needs '<host-ip> <token>'", level: .error)
-                }
-            }
+            // SteamOS-iOS product invariant: graphics execute on this iPhone/iPad.
+            // Clear Madeira's historical remote-Metal research variables even if a
+            // legacy madeira.cfg still contains remote transport keys.
+            unsetenv("DXMT_REMOTE_METAL")
+            unsetenv("RMETAL_TOKEN")
+            unsetenv("DXMT_REMOTE_BATCH")
+            setenv("STEAMOS_IOS_LOCAL_METAL", "1", 1)
+            logStore.log("[METAL] local-only renderer enforced", level: .success)
 
             // madeira-d3d12: M1 shader-converter gate, in-app.
             // Documents/madeira-d3d12.txt == "1" runs the same canary that
@@ -2160,19 +2243,6 @@ struct ContentView: View {
                 } else {
                     logStore.log("madeira-d3d12: gate off (madeira.cfg d3d12 \(raw == nil ? "unset" : "= '\(val)'"))", level: .debug)
                 }
-            }
-
-            // ml821: coalesced remote messages. Documents/madeira-remote-batch.txt
-            // == "1" makes the pre-submission flush send many buffer ranges per
-            // round trip and drains autorelease pools in one call. It is OPT-IN
-            // because the measurement it is meant to improve needs a matched
-            // baseline: with the file absent the process behaves exactly as
-            // ml820 did. Round-trip COUNT is the cost being attacked -- one
-            // gameplay frame spent 369 ms of 524 ms on 2,197 serialized calls.
-            if let txt = MadeiraConfig.get("remote-batch"),
-               txt.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
-                setenv("DXMT_REMOTE_BATCH", "1", 1)
-                logStore.log("remote Metal: message coalescing ON via madeira.cfg remote-batch", level: .success)
             }
 
             // ml761: top-level API census. Documents/madeira-apicensus.txt == "1"
@@ -2259,6 +2329,9 @@ struct ContentView: View {
                 logStore.log("  Force-quit and relaunch: placement is chosen by the kernel", level: .info)
                 logStore.log("  and depends on current memory layout, so a fresh process", level: .info)
                 logStore.log("  usually lands somewhere valid.", level: .info)
+                DispatchQueue.main.async {
+                    self.productState = .failed("Executable JIT memory pool allocation failed. Force-quit and retry.")
+                }
                 logStore.uiPaused = false
                 return
             }
@@ -2395,48 +2468,145 @@ struct ContentView: View {
         }
     }
 
-    /// ml589: locate an installed Steam inside the prefix and (re)generate
-    /// C:\steam-launch.bat to match. Returns false, having logged the reason,
-    /// when there is nothing runnable.
-    ///
-    /// Generating the batch here fixes a gap that only showed on FRESH prefixes:
-    /// steam-launch.bat was never part of prefix-template.tar.gz, it had only
-    /// ever been hand-pushed to the dev device, so a new install ran
-    /// `cmd /c C:\steam-launch.bat` against a file that did not exist.
-    ///
-    /// The generated batch launches steam.exe DIRECTLY rather than through
-    /// start.exe. That wrapper's teardown is what killed services.exe's RPC
-    /// listener in every broken run (ml579/580/584/585) and took the Start menu
-    /// with it; launching directly also keeps cmd+conhost alive for the session.
-    private func prepareSteamLaunch() -> Bool {
+    /// Resolve the installed Steam directory in the app-owned Wine prefix.
+    /// The first-run bootstrap installs the official Windows client into the
+    /// normal 32-bit Program Files tree, but the 64-bit tree remains accepted.
+    private func steamInstallLocation() -> (win: String, unix: String)? {
         let fm = FileManager.default
         let prefix = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
             .appendingPathComponent("wine").path
-
-        // (windows dir, unix dir) — Steam installs to Program Files (x86) by
-        // default, but honour a 64-bit-tree install too.
         let candidates = [
             ("C:\\Program Files (x86)\\Steam", "\(prefix)/drive_c/Program Files (x86)/Steam"),
             ("C:\\Program Files\\Steam",       "\(prefix)/drive_c/Program Files/Steam"),
         ]
+        return candidates.first(where: { fm.fileExists(atPath: "\($0.1)/steam.exe") })
+    }
 
-        guard let (winDir, _) = candidates.first(where: {
-            fm.fileExists(atPath: "\($0.1)/steam.exe")
-        }) else {
-            logStore.log("Steam is not installed in this prefix.", level: .error)
-            logStore.log("  Searched: Program Files (x86)\\Steam and Program Files\\Steam", level: .info)
-            logStore.log("  Valve's SteamSetup.exe cannot be used to install it here: the", level: .info)
-            logStore.log("  installer AND the Steam.exe it lays down are 32-bit x86, and this", level: .info)
-            logStore.log("  build runs x86-64 only (ARM64EC + FEX, no 32-bit emulator).", level: .info)
-            logStore.log("  Copy an existing 64-bit Steam folder into the prefix instead.", level: .info)
+    private func steamIsInstalled() -> Bool {
+        steamInstallLocation() != nil
+    }
+
+    /// Configure the normal Steam product session.
+    ///
+    /// Research probes stay opt-in through dedicated diagnostics controls; the
+    /// ordinary Steam button must not enable frame dumps, source watches, IR
+    /// capture, socket tracing, or optimizer experiments.
+    private func configureSteamProductRuntime(batch: String, deskW: Int, deskH: Int) {
+        let clear = [
+            "MADEIRA_STEAM_APP_PATH", "MADEIRA_STEAM_APP_ID",
+            "MADEIRA_SOCK_WIRE", "FEX_O0", "MADEIRA_NO_DFE", "MADEIRA_IR_TOPO",
+            "MADEIRA_IRCAP_RVA", "MADEIRA_IRCAP_MODULE",
+            "MADEIRA_DUMP_SURFACES", "MADEIRA_SURF_SEQ",
+            "MADEIRA_DEAD_RELEASE", "MADEIRA_SRCWATCH", "MADEIRA_SRCWATCH_ROWS"
+        ]
+        for name in clear { unsetenv(name) }
+
+        setenv("MADEIRA_EXE", "explorer.exe", 1)
+        setenv("MADEIRA_ARGS",
+               "/desktop=shell,\(deskW)x\(deskH) cmd /c C:\\\(batch)", 1)
+        setenv("MADEIRA_DESKTOP", "1", 1)
+        setenv("MADEIRA_SCREEN_W", String(deskW), 1)
+        setenv("MADEIRA_SCREEN_H", String(deskH), 1)
+        setenv("STEAMOS_IOS_TOUCHSCREEN", "1", 1)
+
+        // This means V8/CEF jitless, NOT FEX jitless. FEX x86/x64 translation
+        // still requires the executable JIT gate and the large StikJIT pool.
+        setenv("MADEIRA_JITLESS", "1", 1)
+    }
+
+    /// First-run Windows Steam bootstrap.
+    ///
+    /// Valve's current Windows installer is a 32-bit PE. The frozen Madeira
+    /// baseline now ships the WoW64/FEX chain required to execute it, so the old
+    /// "copy a CrossOver Steam folder" requirement is obsolete.
+    @MainActor
+    private func bootstrapSteamFirstRun(deskW: Int, deskH: Int) async {
+        guard SteamOSRuntimeGate.validate(log: logStore) else {
+            productState = .failed("Local JIT/Metal runtime validation failed before Steam installation.")
+            return
+        }
+
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let prefixURL = docs.appendingPathComponent("wine", isDirectory: true)
+        let driveC = prefixURL.appendingPathComponent("drive_c", isDirectory: true)
+        let setupURL = driveC.appendingPathComponent("SteamSetup.exe")
+        let bootstrapBAT = driveC.appendingPathComponent("steam-bootstrap.bat")
+
+        guard let officialURL = URL(string: "https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe") else {
+            logStore.log("Internal error: invalid Steam installer URL", level: .error)
+            productState = .failed("The Steam installer URL is invalid.")
+            return
+        }
+
+        do {
+            try fm.createDirectory(at: prefixURL, withIntermediateDirectories: true)
+            prefixURL.path.withCString { madeira_seed_prefix_if_needed($0) }
+            guard fm.fileExists(atPath: driveC.path) else {
+                throw NSError(domain: "SteamBootstrap", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey:
+                                "Wine prefix bootstrap did not create drive_c"])
+            }
+
+            logStore.log("Steam first run: downloading Valve SteamSetup.exe...")
+            let (data, response) = try await URLSession.shared.data(from: officialURL)
+
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                throw NSError(domain: "SteamBootstrap", code: http.statusCode,
+                              userInfo: [NSLocalizedDescriptionKey: "Steam download HTTP \(http.statusCode)"])
+            }
+
+            guard data.count >= 1_000_000,
+                  data[data.startIndex] == 0x4d,
+                  data[data.index(after: data.startIndex)] == 0x5a else {
+                throw NSError(domain: "SteamBootstrap", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "Downloaded SteamSetup.exe is not a valid PE payload"])
+            }
+
+            try data.write(to: setupURL, options: .atomic)
+            logStore.log("SteamSetup.exe ready (\(data.count) bytes)", level: .success)
+
+            let bat = """
+            @echo off\r
+            C:\\SteamSetup.exe /S\r
+            if not exist "C:\\Program Files (x86)\\Steam\\steam.exe" exit /b 2\r
+            start "" "C:\\windows\\system32\\services.exe"\r
+            cd /d "C:\\Program Files (x86)\\Steam"\r
+            rem CEF stays software-rasterized during bring-up; games still use local DXMT/D3D12 -> Metal.\r
+            "C:\\Program Files (x86)\\Steam\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
+            """
+            try bat.write(to: bootstrapBAT, atomically: true, encoding: .utf8)
+
+            // Install + launch in the same Madeira/Wine session. SteamSetup.exe
+            // enters WoW64; the installed x64 helpers continue through FEX.
+            configureSteamProductRuntime(batch: "steam-bootstrap.bat",
+                                         deskW: deskW, deskH: deskH)
+
+            logStore.log("Launching official Steam installer through Wine WoW64 + FEX...", level: .success)
+            runWineFullSequence()
+        } catch {
+            logStore.log("Steam first-run bootstrap failed: \(error.localizedDescription)", level: .error)
+            productState = .failed("Steam installation failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Locate an installed Steam client and regenerate the stable launch batch.
+    private func prepareSteamLaunch() -> Bool {
+        guard let (winDir, _) = steamInstallLocation() else {
+            logStore.log("Steam is not installed yet; first-run bootstrap is required.", level: .error)
             return false
         }
 
+        let fm = FileManager.default
+        let prefix = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("wine").path
+
         let bat = """
         @echo off\r
-        rem Generated by Madeira (ml589) — do not hand-edit; rewritten every launch.\r
+        rem Generated by SteamOS-iOS — rewritten every launch.\r
         start "" "C:\\windows\\system32\\services.exe"\r
         cd /d "\(winDir)"\r
+        rem CEF stays software-rasterized during bring-up; games still use local DXMT/D3D12 -> Metal.\r
         "\(winDir)\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
         """
 
@@ -2544,7 +2714,7 @@ struct SetupGuideView: View {
                     guideRow(
                         icon: "cpu",
                         title: "JIT Compilation",
-                        detail: "Required for x86 code translation. On iOS 26, StikDebug must stay attached — assign the 'universal' or 'MeloNX' JIT script to Madeira in StikDebug."
+                        detail: "Required for x86/x64 translation. On iOS 27, use StikDebug to grant executable JIT memory before Steam or game launch; SteamOS-iOS verifies JIT before starting the runtime."
                     )
                     guideRow(
                         icon: "memorychip",
@@ -2559,15 +2729,15 @@ struct SetupGuideView: View {
                 }
 
                 Section("Setup Steps") {
-                    stepRow(number: 1, text: "Install Madeira via SideStore or Xcode")
+                    stepRow(number: 1, text: "Install SteamOS-iOS via SideStore or Xcode")
                     stepRow(number: 2, text: "Install GetMoreRam and run it to inject memory entitlements into your App ID")
-                    stepRow(number: 3, text: "Reinstall Madeira with the same IPA to apply injected entitlements")
-                    stepRow(number: 4, text: "In StikDebug, assign the 'universal' JIT script to Madeira and launch it")
-                    stepRow(number: 5, text: "Launch Madeira and tap 'Test JIT' to verify")
+                    stepRow(number: 3, text: "Reinstall SteamOS-iOS with the same IPA to apply injected entitlements")
+                    stepRow(number: 4, text: "In StikDebug, assign the 'universal' JIT script to SteamOS-iOS and launch it")
+                    stepRow(number: 5, text: "Launch SteamOS-iOS; Steam starts automatically after JIT is ready")
                 }
 
                 Section("About") {
-                    Text("Madeira is a proof-of-concept for running x86 Windows games on iOS using FEX-Emu, Wine, and Metal-based graphics translation.")
+                    Text("SteamOS-iOS runs the real Windows Steam client and supported Windows games locally through Wine, FEX and Metal.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -2607,6 +2777,110 @@ struct SetupGuideView: View {
                 .font(.subheadline)
         }
         .padding(.vertical, 2)
+    }
+}
+
+// ============================================================================
+// SteamOS-iOS native Steam Settings
+// ============================================================================
+struct SteamSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var input = InputSettings.shared
+    @ObservedObject private var controls = TouchControlsModel.shared
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Touchscreen") {
+                    Toggle("Full-screen Touch", isOn: $input.touchScreenEnabled)
+
+                    Picker("Touch Mode", selection: $input.directTouch) {
+                        Text("Direct Touch").tag(true)
+                        Text("Mouse / Trackpad").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!input.touchScreenEnabled)
+
+                    Text(input.directTouch
+                         ? "Direct Touch maps your finger to the same aspect-correct Windows surface shown on screen."
+                         : "Mouse / Trackpad enables relative mouse-look, two-finger scrolling, right-click, and drag gestures.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Controller Overlay") {
+                    Toggle("Show Controller Overlay", isOn: Binding(
+                        get: { input.controllerOverlayEnabled },
+                        set: { enabled in
+                            if enabled { controls.ensureDefaultLayout() }
+                            input.controllerOverlayEnabled = enabled
+                            if !enabled {
+                                controls.editing = false
+                                controls.selected = nil
+                            }
+                        }
+                    ))
+
+                    HStack {
+                        Button("Edit Controller Layout") {
+                            controls.ensureDefaultLayout()
+                            // Transient edit mode is independent from the
+                            // persistent gameplay overlay visibility setting.
+                            controls.editing = true
+                            controls.selected = nil
+                            dismiss()
+                        }
+
+                        Button("Reset Layout") {
+                            // Reset only geometry/mappings. Do not surprise the
+                            // user by turning the gameplay overlay back on.
+                            controls.resetDefaultLayout()
+                        }
+                    }
+
+                    Text("Optional. Editing/resetting does not enable it. Turning it off removes the controller only; full-screen Direct Touch / Mouse-Trackpad input and physical controllers remain available. Rotate to landscape to edit.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Keyboard") {
+                    Button("Show On-Screen Keyboard") {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            MetalBackedView.toggleKeyboard()
+                        }
+                    }
+                    Text("Use this for Steam sign-in, Steam Guard, search, chat, and games that need text input.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Pointer") {
+                    Toggle("Relative Mouse / Mouse-look", isOn: $input.relative)
+                        .disabled(input.directTouch || !input.touchScreenEnabled)
+                    LabeledContent("Absolute sensitivity") {
+                        Text(String(format: "%.2f", input.sensAbs))
+                            .monospacedDigit()
+                    }
+                    Slider(value: $input.sensAbs, in: 0.10...8.0)
+                        .disabled(input.directTouch || !input.touchScreenEnabled)
+
+                    LabeledContent("Relative sensitivity") {
+                        Text(String(format: "%.2f", input.sensRel))
+                            .monospacedDigit()
+                    }
+                    Slider(value: $input.sensRel, in: 0.10...8.0)
+                        .disabled(input.directTouch || !input.touchScreenEnabled)
+                }
+            }
+            .navigationTitle("Steam Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 
@@ -2701,7 +2975,7 @@ final class TouchControlsModel: ObservableObject {
     static let baseDiameter: CGFloat = 64
 
     @Published var controls: [TouchControl] = [] { didSet { save() } }
-    @Published var visible = true               { didSet { save() } }
+    @Published var visible = false              { didSet { save() } }
     @Published var editing = false              // transient, never persisted
     @Published var selected: UUID?              // transient
 
@@ -2711,23 +2985,100 @@ final class TouchControlsModel: ObservableObject {
             .appendingPathComponent("madeira-controls.json")
     }
 
-    private struct Saved: Codable { var controls: [TouchControl]; var visible: Bool }
+    private static let currentLayoutVersion = 2
+
+    private struct Saved: Codable {
+        var controls: [TouchControl]
+        var visible: Bool
+        var layoutVersion: Int?
+    }
 
     private init() {
         loading = true
         if let d = try? Data(contentsOf: Self.url),
            let s = try? JSONDecoder().decode(Saved.self, from: d) {
-            controls = s.controls
-            visible  = s.visible
+            controls = Self.migrateLayout(
+                s.controls.isEmpty ? Self.defaultLayout() : s.controls,
+                from: s.layoutVersion ?? 1)
+            visible = false
+        } else {
+            controls = Self.defaultLayout()
+            visible = false
         }
         loading = false
+        save()
+    }
+
+    private static func defaultLayout() -> [TouchControl] {
+        func c(_ x: Double, _ y: Double, _ scale: Double, _ action: ControlAction) -> TouchControl {
+            TouchControl(nx: x, ny: y, scale: scale, action: action)
+        }
+        return [
+            c(0.15, 0.70, 1.65, .pad("LS")),
+            c(0.70, 0.70, 1.55, .pad("RS")),
+            c(0.25, 0.84, 0.78, .pad("L3")),
+            c(0.72, 0.84, 0.78, .pad("R3")),
+            c(0.89, 0.68, 1.00, .pad("A")),
+            c(0.94, 0.57, 1.00, .pad("B")),
+            c(0.84, 0.57, 1.00, .pad("X")),
+            c(0.89, 0.46, 1.00, .pad("Y")),
+            c(0.08, 0.49, 0.86, .pad("D↑")),
+            c(0.08, 0.63, 0.86, .pad("D↓")),
+            c(0.03, 0.56, 0.86, .pad("D←")),
+            c(0.13, 0.56, 0.86, .pad("D→")),
+            c(0.13, 0.16, 0.92, .pad("LB")),
+            c(0.22, 0.13, 0.92, .pad("LT")),
+            c(0.78, 0.13, 0.92, .pad("RT")),
+            c(0.87, 0.16, 0.92, .pad("RB")),
+            c(0.43, 0.16, 0.78, .pad("View")),
+            c(0.50, 0.11, 0.78, .pad("Guide")),
+            c(0.57, 0.16, 0.78, .pad("Menu"))
+        ]
+    }
+
+    private static func migrateLayout(_ input: [TouchControl], from version: Int) -> [TouchControl] {
+        guard version < currentLayoutVersion else { return input }
+        var migrated = input
+
+        func normalizeThumbClick(_ name: String, x: Double) {
+            var keptOne = false
+            migrated.removeAll { control in
+                guard control.action.padName == name else { return false }
+                if !keptOne {
+                    keptOne = true
+                    return false
+                }
+                return true
+            }
+            if !keptOne {
+                migrated.append(TouchControl(nx: x, ny: 0.84, scale: 0.78, action: .pad(name)))
+            }
+        }
+
+        // v2 completes and de-duplicates old saved layouts without replacing
+        // any other user positions/remaps. After migration the version is
+        // persisted, so later deliberate user deletion remains respected.
+        normalizeThumbClick("L3", x: 0.25)
+        normalizeThumbClick("R3", x: 0.72)
+        return migrated
     }
 
     private func save() {
         guard !loading else { return }
-        guard let d = try? JSONEncoder().encode(Saved(controls: controls, visible: visible))
+        guard let d = try? JSONEncoder().encode(
+            Saved(controls: controls, visible: visible,
+                  layoutVersion: Self.currentLayoutVersion))
         else { return }
         try? d.write(to: Self.url, options: .atomic)
+    }
+
+    func ensureDefaultLayout() {
+        if controls.isEmpty { controls = Self.defaultLayout() }
+    }
+
+    func resetDefaultLayout() {
+        controls = Self.defaultLayout()
+        selected = nil
     }
 
     func index(of id: UUID?) -> Int? {
@@ -2745,13 +3096,14 @@ final class TouchControlsModel: ObservableObject {
     /// touch in the window. Nothing responded, and edit mode — whose branch
     /// captured everything — could never be entered to mask it.
     func hitsInteractive(_ p: CGPoint, in bounds: CGRect) -> Bool {
-        // Top bar: two 44pt buttons 10pt apart in play mode, centred, 10pt down.
-        // Padded generously; a few points of slop costs nothing and a missed tap
-        // costs a build.
-        let barW: CGFloat = 2 * 44 + 10
-        if CGRect(x: bounds.midX - barW / 2 - 10, y: 0,
-                  width: barW + 20, height: 68).contains(p) { return true }
-        guard visible else { return false }
+        guard InputSettings.shared.controllerOverlayEnabled else { return false }
+        // Done/Add exist only while editing. Normal gameplay has NO overlay
+        // chrome; Steam Settings is opened with the three-finger gesture.
+        if editing {
+            let barW: CGFloat = 2 * 44 + 10
+            if CGRect(x: bounds.midX - barW / 2 - 10, y: 0,
+                      width: barW + 20, height: 68).contains(p) { return true }
+        }
         for c in controls {
             let r = Self.baseDiameter * CGFloat(c.scale) / 2
             let cx = CGFloat(c.nx) * bounds.width
@@ -2771,11 +3123,12 @@ final class TouchControlsModel: ObservableObject {
 final class ControlsWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let m = TouchControlsModel.shared
-        // Edit mode owns the whole screen: drags and the scale pinch must not
-        // leak through and swing the camera while you are arranging buttons.
-        if m.editing { return super.hitTest(point, with: event) }
-        // Portrait draws nothing here, so it must consume nothing.
+        // The controller/editor is landscape-only. Portrait draws nothing here,
+        // so the transparent UIWindow must NEVER trap Steam's touchscreen.
         guard bounds.width > bounds.height else { return nil }
+        // Edit mode owns the landscape screen: drags and the scale pinch must not
+        // leak through and swing the camera while controls are being arranged.
+        if m.editing { return super.hitTest(point, with: event) }
         guard m.hitsInteractive(point, in: bounds) else { return nil }
         return super.hitTest(point, with: event)
     }
@@ -2783,6 +3136,12 @@ final class ControlsWindow: UIWindow {
 
 enum TouchControlsHost {
     private static var window: ControlsWindow?
+    private static var productHidden = false
+
+    static func setHidden(_ hidden: Bool) {
+        productHidden = hidden
+        window?.isHidden = hidden
+    }
 
     static func attach() {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -2798,7 +3157,7 @@ enum TouchControlsHost {
             // ordering nothing inside the app window can undo.
             w.windowLevel = .normal + 101
             w.backgroundColor = .clear
-            w.isHidden = false        // deliberately never made key
+            w.isHidden = productHidden // deliberately never made key
             let host = UIHostingController(rootView: TouchControlsOverlay())
             host.view.backgroundColor = .clear
             w.rootViewController = host
@@ -2812,6 +3171,7 @@ enum TouchControlsHost {
 
 struct TouchControlsOverlay: View {
     @ObservedObject private var m = TouchControlsModel.shared
+    @ObservedObject private var input = InputSettings.shared
     @State private var pinchBase: Double?
 
     var body: some View {
@@ -2820,12 +3180,12 @@ struct TouchControlsOverlay: View {
             let landscape = geo.size.width > geo.size.height
             ZStack(alignment: .top) {
                 if landscape {
-                    if m.visible || m.editing {
+                    if input.controllerOverlayEnabled || m.editing {
                         ForEach(m.controls) { c in
                             TouchControlButton(control: c, screen: geo.size)
                         }
                     }
-                    topBar
+                    if m.editing { topBar }
                     if m.editing, let i = m.index(of: m.selected) {
                         MappingPanel(control: m.controls[i], screen: geo.size)
                     }
@@ -2837,7 +3197,13 @@ struct TouchControlsOverlay: View {
             .onAppear { configureGamepad(landscape: landscape) }
             .onChange(of: geo.size) { _, _ in configureGamepad(landscape: landscape) }
             .onChange(of: m.controls) { _, _ in configureGamepad(landscape: landscape) }
-            .onChange(of: m.visible) { _, _ in configureGamepad(landscape: landscape) }
+            .onChange(of: input.controllerOverlayEnabled) { _, enabled in
+                if !enabled {
+                    m.editing = false
+                    m.selected = nil
+                }
+                configureGamepad(landscape: landscape)
+            }
             .onChange(of: m.editing) { _, _ in configureGamepad(landscape: landscape) }
             .onDisappear { GamepadInput.shared.configureTouch(controls: []) }
         }
@@ -2845,28 +3211,23 @@ struct TouchControlsOverlay: View {
     }
 
     private func configureGamepad(landscape: Bool) {
-        let ids = landscape && m.visible && !m.editing
+        let ids = landscape && input.controllerOverlayEnabled && !m.editing
             ? m.controls.filter { $0.action.padName.map(TouchPadAction.supported) ?? false }.map(\.id) : []
         GamepadInput.shared.configureTouch(controls: Set(ids))
     }
 
     private var topBar: some View {
         HStack(spacing: 10) {
-            glassButton("gamecontroller", dim: !m.visible) { m.visible.toggle() }
-            glassButton(m.editing ? "checkmark" : "pencil") {
-                m.editing.toggle()
-                if !m.editing { m.selected = nil }
+            glassButton("checkmark") {
+                m.editing = false
+                m.selected = nil
             }
-            if m.editing {
-                glassButton("plus") {
-                    var c = TouchControl()
-                    // Stagger, so repeated adds do not stack invisibly.
-                    c.nx = 0.5 + Double(m.controls.count % 3) * 0.06
-                    c.ny = 0.5 + Double(m.controls.count % 2) * 0.06
-                    m.controls.append(c)
-                    m.selected = c.id
-                }
-                .transition(.opacity.combined(with: .scale))
+            glassButton("plus") {
+                var c = TouchControl()
+                c.nx = 0.5 + Double(m.controls.count % 3) * 0.06
+                c.ny = 0.5 + Double(m.controls.count % 2) * 0.06
+                m.controls.append(c)
+                m.selected = c.id
             }
         }
         .padding(.top, 10)

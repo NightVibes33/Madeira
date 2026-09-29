@@ -1,0 +1,272 @@
+name: SteamOS-iOS Windows foundation gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [steamos-ios]
+  pull_request:
+    branches: [steamos-ios]
+
+concurrency:
+  group: steamos-ios-windows-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-runtime-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Verify frozen Madeira pins
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Verify shell syntax before expensive builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            echo "bash -n $script"
+            bash -n "$script"
+          done < <(find build tools -type f -name '*.sh' -print0)
+
+      - name: Verify pinned ARM64EC-capable llvm-mingw
+        shell: bash
+        run: |
+          grep -F 'NAME="llvm-mingw-20260922-ucrt-macos-universal"' tools/bootstrap/fetch-llvm-mingw.sh
+          grep -F 'EXPECTED="52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3"' tools/bootstrap/fetch-llvm-mingw.sh
+          grep -F 'ARM64EC_CXX_RUNTIME_OK' tools/bootstrap/fetch-llvm-mingw.sh
+          old='llvm-mingw-2026''0421-ucrt-macos-universal'
+          ! grep -R -n -F "$old" build/fex-arm64ec build/fex-wow64 build/wine-pe build/wine-i386 build/steamos-ios .github/workflows/steamos-ios-components.yml .github/workflows/steamos-ios-win32u.yml .github/workflows/steamos-ios-wine-unix.yml
+
+      - name: Reject active Linux Steam personality
+        shell: bash
+        run: |
+          test ! -e runtime/linux
+          test ! -e tests/elf
+          test ! -e tests/linux-process
+          test ! -e tests/linux-syscalls
+          ! grep -R -n -E 'steamos_linux_|STEAMOS_IOS_ELF_OK|Run Linux ELF L0' app/Madeira app/Madeira.xcodeproj docs/STEAMOS_IOS_ARCHITECTURE.md
+
+      - name: Verify robust pinned LLVM source fetch
+        shell: bash
+        run: |
+          grep -F 'MAX_ATTEMPTS=5' tools/runtime-deps/fetch-llvm-project.sh
+          grep -F 'LLVM_PROJECT_FETCH attempt=' tools/runtime-deps/fetch-llvm-project.sh
+          grep -F 'http.version HTTP/1.1' tools/runtime-deps/fetch-llvm-project.sh
+
+      - name: Verify LLVM 23 pinned-FEX compatibility patch
+        shell: bash
+        run: |
+          test -s tools/patches/fex-llvm23-cstdlib.patch
+          grep -F '#include <cstdlib>' tools/patches/fex-llvm23-cstdlib.patch
+          grep -F 'fex-llvm23-cstdlib.patch' build/fex-arm64ec/build.sh
+          grep -F 'fex-llvm23-cstdlib.patch' build/fex-wow64/build.sh
+
+      - name: Verify ARM64EC FEX disables LTO
+        shell: bash
+        run: |
+          grep -F -- '-DENABLE_LTO=OFF' build/fex-arm64ec/build.sh
+          grep -F -- '-DENABLE_LTO=OFF' build/fex-wow64/build.sh
+
+      - name: Verify clean IPA host prerequisites
+        shell: bash
+        run: |
+          grep -F 'brew install bison ccache ninja meson sevenzip' .github/workflows/steamos-ios-app.yml
+          grep -F 'for tool in cmake ninja meson python3 xcodebuild' build/steamos-ios/build-clean-app.sh
+          grep -F 'CLEAN_APP_HOST_TOOLS_OK' build/steamos-ios/build-clean-app.sh
+
+      - name: Verify clean build regenerates WoW64/i386 payload
+        shell: bash
+        run: |
+          grep -F 'bash build/fex-arm64ec/build.sh' build/steamos-ios/build-clean-app.sh
+          grep -F -- '-DMINGW_TRIPLE=arm64ec-w64-mingw32' build/fex-arm64ec/build.sh
+          grep -F -- '-DFEX_IOS_HOST_BUILD=ON' build/fex-arm64ec/build.sh
+          grep -F -- '-DCMAKE_CXX_FLAGS=-DFEX_IOS_HOST' build/fex-arm64ec/build.sh
+          grep -F 'bash build/fex-wow64/build.sh' build/steamos-ios/build-clean-app.sh
+          grep -F 'bash build/wine-i386/build.sh' build/steamos-ios/build-clean-app.sh
+          grep -F 'STEAMOS_IOS_WOW64_PAYLOAD_OK' build/steamos-ios/build-clean-app.sh
+          grep -F 'i386 import closure FAILED' build/wine-i386/build.sh
+
+      - name: Verify no native Linux-ELF FEX bridge is linked
+        shell: bash
+        run: |
+          test ! -e app/Madeira/FEXBridge.mm
+          test ! -e app/Madeira/FEXBridge.h
+          test ! -e app/Madeira/hello_x86.elf
+          test ! -e app/Madeira/hello_x86.h
+          ! grep -F 'FEXBridge' app/Madeira/Madeira-Bridging-Header.h
+          ! grep -F 'FEXBridge' app/Madeira.xcodeproj/project.pbxproj
+          ! grep -F 'libFEXCore.a' app/Madeira.xcodeproj/project.pbxproj
+          ! grep -F 'build/fex-ios/build.sh' build/steamos-ios/build-clean-app.sh
+
+      - name: Verify FEX + Wine ARM64EC + WoW64 payload
+        shell: bash
+        run: |
+          test "$(git ls-tree HEAD FEX | awk '{print $3}')" = "2838f3be52437620348264ada6c41042a9085290"
+          test "$(git ls-tree HEAD wine | awk '{print $3}')" = "8e3d23c77ceb903b59fdd8c123c867b7591490d5"
+          test -s app/Madeira/aarch64-windows/wow64.dll
+          test -s app/Madeira/aarch64-windows/wow64win.dll
+          test -s app/Madeira/aarch64-windows/xtajit.dll
+          test -s app/Madeira/arm64ec-windows/xtajit64.dll
+
+      - name: Verify normal Steam launch has no research probes
+        shell: bash
+        run: |
+          grep -F 'private func configureSteamProductRuntime' app/Madeira/ContentView.swift
+          grep -F '"MADEIRA_IRCAP_RVA", "MADEIRA_IRCAP_MODULE"' app/Madeira/ContentView.swift
+          grep -F '"MADEIRA_DUMP_SURFACES", "MADEIRA_SURF_SEQ"' app/Madeira/ContentView.swift
+          grep -F '"MADEIRA_DEAD_RELEASE", "MADEIRA_SRCWATCH", "MADEIRA_SRCWATCH_ROWS"' app/Madeira/ContentView.swift
+          grep -F 'setenv("MADEIRA_JITLESS", "1", 1)' app/Madeira/ContentView.swift
+          ! grep -F 'setenv("MADEIRA_SURF_SEQ"' app/Madeira/ContentView.swift
+          ! grep -F 'setenv("MADEIRA_IRCAP_RVA"' app/Madeira/ContentView.swift
+
+      - name: Verify Steam batch interpolation
+        shell: bash
+        run: |
+          grep -F 'cmd /c C:\\\(batch)' app/Madeira/ContentView.swift
+          ! grep -F 'cmd /c C:\\\\(batch)' app/Madeira/ContentView.swift
+
+      - name: Verify Steam first-run bootstrap
+        shell: bash
+        run: |
+          grep -F 'https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe' app/Madeira/ContentView.swift
+          grep -F 'C:\\SteamSetup.exe /S' app/Madeira/ContentView.swift
+          grep -F 'steam-bootstrap.bat' app/Madeira/ContentView.swift
+          grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
+
+      - name: Verify first-run Wine prefix seed
+        shell: bash
+        run: |
+          grep -F 'madeira_seed_prefix_if_needed' app/Madeira/WineProcessBridge.h
+          grep -F 'madeira_seed_prefix_if_needed' app/Madeira/ContentView.swift
+
+      - name: Verify adaptive iPhone/iPad display
+        shell: bash
+        run: |
+          grep -F 'private enum SteamOSDisplayProfile' app/Madeira/ContentView.swift
+          grep -F 'let height = isPad ? 900 : 720' app/Madeira/ContentView.swift
+          grep -F 'window.safeAreaInsets' app/Madeira/ContentView.swift
+          grep -F 'SteamOSDisplayProfile.activeGuestSize()' app/Madeira/ContentView.swift
+          test -s docs/STEAMOS_IOS_DISPLAY.md
+
+      - name: Verify mandatory JIT + local Apple GPU
+        shell: bash
+        run: |
+          grep -F 'private enum SteamOSRuntimeGate' app/Madeira/ContentView.swift
+          grep -F 'jit_check_debugged()' app/Madeira/ContentView.swift
+          grep -F 'let probe = jit_test_execute()' app/Madeira/ContentView.swift
+          grep -F 'guard probe == 42' app/Madeira/ContentView.swift
+          grep -F 'MTLCreateSystemDefaultDevice()' app/Madeira/ContentView.swift
+          grep -F 'STEAMOS_IOS_LOCAL_METAL' app/Madeira/ContentView.swift
+          grep -F 'JIT pool allocation FAILED — not starting Wine.' app/Madeira/ContentView.swift
+          ! grep -E '^[[:space:]]*setenv\("DXMT_REMOTE_METAL"' app/Madeira/ContentView.swift
+          ! grep -E '^[[:space:]]*setenv\("RMETAL_TOKEN"' app/Madeira/ContentView.swift
+
+      - name: Verify Windows FEX uses the real Steam/game JIT pool
+        shell: bash
+        run: |
+          grep -F 'setenv("WINE_IOS_JIT_RX"' app/Madeira/ContentView.swift
+          grep -F 'setenv("WINE_IOS_JIT_RW"' app/Madeira/ContentView.swift
+          grep -F 'setenv("WINE_IOS_JIT_SIZE"' app/Madeira/ContentView.swift
+          grep -F 'WINE_IOS_JIT_RW - WINE_IOS_JIT_RX' app/Madeira/WineProcessBridge.m
+          ! grep -F 'fex_get_jit_write_offset' app/Madeira/WineProcessBridge.m
+          ! grep -F 'MADEIRA_JIT_WRITE_OFFSET' app/Madeira/WineProcessBridge.m
+
+      - name: Verify Steam child identity is not hard-coded
+        shell: bash
+        run: |
+          grep -F 'MADEIRA_STEAM_APP_PATH' app/Madeira/WineProcessBridge.m
+          grep -F 'MADEIRA_STEAM_APP_ID' app/Madeira/WineProcessBridge.m
+          ! grep -E 'setenv\("Steam(AppId|GameId)"[^;]*356400' app/Madeira/WineProcessBridge.m
+          grep -F 'setenv("MADEIRA_STEAM_APP_ID", "356400", 1)' app/Madeira/ContentView.swift
+
+      - name: Verify mobile-first Steam shell
+        shell: bash
+        run: |
+          grep -F 'private func startSteamAutomatically()' app/Madeira/ContentView.swift
+          grep -F 'private func launchSteamProductRuntime()' app/Madeira/ContentView.swift
+          grep -F 'private var steamProductBody: some View' app/Madeira/ContentView.swift
+          grep -F 'StikJITHelper.enableJIT' app/Madeira/ContentView.swift
+          grep -F '@Published var touchScreenEnabled = true' app/Madeira/ContentView.swift
+          grep -F '@Published var directTouch = true' app/Madeira/ContentView.swift
+          grep -F '@Published var controllerOverlayEnabled = false' app/Madeira/ContentView.swift
+          grep -F 'private static func defaultLayout()' app/Madeira/ContentView.swift
+          grep -F 'active.count >= 3' app/Madeira/ContentView.swift
+          grep -F 'NotificationCenter.default.post(name: .steamOSSettingsRequested' app/Madeira/ContentView.swift
+          grep -F 'STEAMOS_IOS_TOUCHSCREEN' app/Madeira/ContentView.swift
+          grep -F 'struct SteamOSiOSApp: App' app/Madeira/MadeiraApp.swift
+
+      - name: Verify D3D11 Metal path
+        shell: bash
+        run: |
+          test -s app/Madeira/arm64ec-windows/d3d11.dll
+          test -s app/Madeira/arm64ec-windows/dxgi.dll
+          test -s app/Madeira/arm64ec-windows/d3d10core.dll
+          test -s app/Madeira/arm64ec-windows/winemetal.dll
+
+      - name: Verify D3D12 capability canary remains packaged
+        shell: bash
+        run: |
+          test -s app/Madeira/arm64ec-windows/d3d12.dll
+          test -s app/Madeira/arm64ec-windows/d3d12-cube-x64.exe
+
+      - name: Verify Steam Settings touch/controller policy
+        shell: bash
+        run: |
+          grep -F 'struct SteamSettingsView: View' app/Madeira/ContentView.swift
+          grep -F 'Full-screen Touch' app/Madeira/ContentView.swift
+          grep -F 'Show Controller Overlay' app/Madeira/ContentView.swift
+          grep -F '@Published var directTouch = true' app/Madeira/ContentView.swift
+          grep -F '@Published var controllerOverlayEnabled = false' app/Madeira/ContentView.swift
+          grep -F 'InputSettings.shared.controllerOverlayEnabled' app/Madeira/ContentView.swift
+          grep -F 'Notification.Name("SteamOS-iOS.SettingsRequested")' app/Madeira/ContentView.swift
+
+      - name: Verify native iOS host plumbing
+        shell: bash
+        run: |
+          grep -F 'CAMetalLayer' app/Madeira/ContentView.swift
+          grep -F 'GamepadInput.swift' app/Madeira.xcodeproj/project.pbxproj
+          grep -F 'TouchGamepad.swift' app/Madeira.xcodeproj/project.pbxproj
+          grep -F 'JITAllocator.c' app/Madeira.xcodeproj/project.pbxproj
+
+      - name: Verify Settings-owned controller overlay
+        shell: bash
+        run: |
+          grep -F 'TouchControlsHost.setHidden(shown)' app/Madeira/ContentView.swift
+          grep -F 'Button("Reset Layout")' app/Madeira/ContentView.swift
+          grep -F 'func ensureDefaultLayout()' app/Madeira/ContentView.swift
+          grep -F '.pad("L3")' app/Madeira/ContentView.swift
+          grep -F '.pad("R3")' app/Madeira/ContentView.swift
+          grep -F 'Normal gameplay has NO overlay' app/Madeira/ContentView.swift
+          grep -F 'active.count >= 3' app/Madeira/ContentView.swift
+          test -s docs/MOBILE_READINESS.md
+
+      - name: Verify stock L3/R3, editor semantics, and login keyboard
+        shell: bash
+        run: |
+          grep -F 'Button("Show On-Screen Keyboard")' app/Madeira/ContentView.swift
+          grep -F 'MetalBackedView.toggleKeyboard()' app/Madeira/ContentView.swift
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path("app/Madeira/ContentView.swift").read_text()
+          default = s.split("private static func defaultLayout()", 1)[1].split("private static func migrateLayout", 1)[0]
+          assert default.count('.pad("L3")') == 1, "stock layout must contain exactly one L3"
+          assert default.count('.pad("R3")') == 1, "stock layout must contain exactly one R3"
+          assert "currentLayoutVersion = 2" in s
+          assert 'normalizeThumbClick("L3"' in s
+          assert 'normalizeThumbClick("R3"' in s
+          assert "Transient edit mode is independent" in s
+          assert "Reset only geometry/mappings" in s
+          assert "guard bounds.width > bounds.height else { return nil }" in s
+          assert "if m.editing { topBar }" in s
+          PY
+
+      - name: Verify complete mobile shipping contract
+        shell: bash
+        run: python3 tools/verify-mobile-product.py
+
+      - name: Foundation discriminator
+        run: echo STEAMOS_IOS_WINDOWS_FOUNDATION_OK

@@ -8,6 +8,16 @@
 # those code paths fall back to stubs.
 set -e
 
+# Wine's WIDL grammar uses modern Bison directives (%code, etc.). Apple's
+# system bison is too old; hosted Xcode runners install current Bison keg-only.
+if [ -x /opt/homebrew/opt/bison/bin/bison ]; then
+    export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+fi
+if ! bison --version | head -1 | grep -Eq '([3-9]\.|[1-9][0-9]+\.)'; then
+    echo "error: Wine header generation requires Bison 3+" >&2
+    exit 1
+fi
+
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
@@ -18,6 +28,15 @@ OBJ_DIR="$BUILD_DIR/obj"
 APP_LIB="$REPO_ROOT/app/Madeira/libwin32u_unix.a"
 
 mkdir -p "$OBJ_DIR"
+
+# win32u reaches Wine's COM/Shell headers through ntuser_private.h. A clean
+# host configure does not generate these WIDL outputs until a dependent target
+# asks for them, but this standalone static-archive build invokes clang
+# directly. Materialize the exact IDL closure first.
+python3 "$REPO_ROOT/tools/runtime-deps/build-wine-idl-headers.py" \
+    "$WINE_SRC" "$WINE_BUILD" \
+    objidlbase.idl objidl.idl shobjidl.idl exdisp.idl shldisp.idl \
+    dxgi.idl d3d10.idl d3d11.idl d3d12.idl
 
 SUCCEEDED=0
 FAILED=0
@@ -59,6 +78,9 @@ compile_one() {
         SUCCEEDED=$((SUCCEEDED + 1))
     else
         echo "FAILED"
+        echo "----- $name compiler diagnostics -----" >&2
+        sed -n '1,220p' "$OBJ_DIR/$name.err" >&2 || true
+        echo "----- end $name diagnostics -----" >&2
         FAILED=$((FAILED + 1))
         FAILED_FILES="$FAILED_FILES $name"
     fi

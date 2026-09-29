@@ -56,13 +56,22 @@ enum StikJITHelper {
         }
     }
 
-    /// Poll every 0.5s until CS_DEBUGGED is set, then call completion.
-    private static func pollForJIT(completion: @escaping (Bool) -> Void) {
+    /// Poll every 0.5s for CS_DEBUGGED, but never leave the product loader
+    /// spinning forever if StikDebug opened but failed to attach.
+    private static func pollForJIT(timeout: TimeInterval = 120,
+                                   completion: @escaping (Bool) -> Void) {
+        let deadline = Date().addingTimeInterval(timeout)
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
             if jit_check_debugged() {
                 timer.invalidate()
                 LogStore.shared.log("JIT enabled! (CS_DEBUGGED set)", level: .success)
                 completion(true)
+                return
+            }
+            if Date() >= deadline {
+                timer.invalidate()
+                LogStore.shared.log("JIT attach timed out after \(Int(timeout))s.", level: .error)
+                completion(false)
             }
         }
     }

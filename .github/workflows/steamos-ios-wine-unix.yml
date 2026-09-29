@@ -1,0 +1,97 @@
+name: SteamOS-iOS Wine unix build gate
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-wine-unix.yml"
+      - "build/ntdll-unix/**"
+      - "build/win32u-unix/**"
+      - "build/wine-pe/**"
+      - "build/crypto-unix/**"
+      - "build/gnutls-ios/**"
+      - "build/freetype-ios/**"
+      - "tools/runtime-deps/fetch-freetype.sh"
+      - "tools/runtime-deps/build-wine-idl-headers.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-wine-unix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wine-unix-clean:
+    name: clean Wine unix archives for iOS
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned Wine
+        run: git submodule update --init --depth 1 wine
+
+      - name: Install host build tools
+        run: brew install bison
+
+      - name: Fetch pinned llvm-mingw
+        run: bash tools/bootstrap/fetch-llvm-mingw.sh
+
+      - name: Verify and build pinned crypto stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd build/gnutls-ios/src && shasum -a 256 -c SHA256SUMS)
+          bash build/gnutls-ios/build.sh
+
+      - name: Fetch and build pinned FreeType
+        run: |
+          bash tools/runtime-deps/fetch-freetype.sh
+          bash build/freetype-ios/build.sh
+
+      - name: Configure Wine host headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          mkdir -p wine/build-macos
+          (
+            cd wine/build-macos
+            ../configure --without-x --disable-tests
+          )
+          test -s wine/build-macos/include/config.h
+          echo "WINE_HOST_HEADERS_OK"
+
+      - name: Configure ARM64EC Wine and rebuild ntdll
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wine-pe/build-ntdll.sh
+          test -s wine/build-arm64ec/include/dwrite.h
+          test -s wine/build-arm64ec/include/dwrite_3.h
+          test -s app/Madeira/arm64ec-windows/ntdll.dll
+          echo "WINE_ARM64EC_HEADERS_OK"
+
+      - name: Build ntdll unix archive
+        run: bash build/ntdll-unix/build.sh
+
+      - name: Build win32u unix archive
+        run: bash build/win32u-unix/build.sh
+
+      - name: Verify Wine unix app link inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s app/Madeira/libntdll_unix.a
+          test -s app/Madeira/libwin32u_unix.a
+          ntdll_members="$(ar -t app/Madeira/libntdll_unix.a | awk '/\.o$/ {n++} END {print n+0}')"
+          win32u_members="$(ar -t app/Madeira/libwin32u_unix.a | awk '/\.o$/ {n++} END {print n+0}')"
+          test "$ntdll_members" -ge 20
+          test "$win32u_members" -ge 20
+          lipo -info app/Madeira/libntdll_unix.a
+          lipo -info app/Madeira/libwin32u_unix.a
+          echo "WINE_UNIX_CLEAN_BUILD_OK ntdll_members=$ntdll_members win32u_members=$win32u_members"
