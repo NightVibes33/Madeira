@@ -37,7 +37,11 @@ def visit(name: str) -> None:
     if name in seen:
         return
     if name in visiting:
-        fail(f"IDL import cycle at {name}")
+        # Wine's generated SDK headers have intentional dependency cycles
+        # (for example d3d10 <-> dxgi/sdk-layer families). The source generator
+        # can emit either side without the peer header existing yet, so keep
+        # the node in the closure and let one make invocation build the set.
+        return
     if not name.endswith(".idl"):
         return
 
