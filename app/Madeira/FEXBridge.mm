@@ -666,6 +666,13 @@ int64_t fex_test_execute(void) {
     stack_spec.argc = 1;
     stack_spec.page_size = JIT_PAGE_SIZE;
     stack_spec.entry = code_addr;
+    stack_spec.phent = elf_image.phent;
+    stack_spec.phnum = elf_image.phnum;
+    if (elf_image.phdr_virtual_address) {
+        stack_spec.phdr =
+            reinterpret_cast<uint64_t>(elf_base) +
+            (elf_image.phdr_virtual_address - elf_image.load_min);
+    }
 
     const steamos_linux_stack_error stack_error =
         steamos_linux_build_initial_stack(
@@ -683,8 +690,9 @@ int64_t fex_test_execute(void) {
         return -1;
     }
 
-    fex_log("Linux initial stack at 0x%llx (base=%p, size=0x%x, argc=1, AT_ENTRY=0x%llx)",
+    fex_log("Linux initial stack at 0x%llx (base=%p, size=0x%x, argc=1, AT_PHDR=0x%llx, AT_ENTRY=0x%llx)",
             (unsigned long long)stack_addr, stack_mem, GUEST_STACK_SIZE,
+            (unsigned long long)stack_spec.phdr,
             (unsigned long long)code_addr);
 
     // Create a thread for execution

@@ -101,6 +101,8 @@ int main(int argc, char **argv)
         return 1;
     }
     if (image.elf_type != 2 || image.entry != 0x400080 || image.load_count != 1 ||
+        image.phdr_virtual_address != 0x400040 ||
+        image.phent != 56 || image.phnum != 1 ||
         image.load[0].virtual_address != 0x400000 ||
         !(image.load[0].flags & STEAMOS_ELF64_PF_X)) {
         fprintf(stderr, "unexpected parsed image\n");

@@ -133,6 +133,16 @@ enum steamos_elf64_error steamos_elf64_parse(
         if (add_overflow_u64(ph.p_vaddr, ph.p_memsz, &mem_end))
             return STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW;
 
+        /* AT_PHDR points at the in-memory program-header table. Find the PT_LOAD
+         * whose file-backed bytes contain e_phoff..e_phoff+e_phnum*e_phentsize. */
+        if (!out_image->phdr_virtual_address &&
+            eh.e_phoff >= ph.p_offset && ph_end <= file_end) {
+            uint64_t phdr_delta = eh.e_phoff - ph.p_offset;
+            if (add_overflow_u64(ph.p_vaddr, phdr_delta,
+                                 &out_image->phdr_virtual_address))
+                return STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW;
+        }
+
         map_start = align_down(ph.p_vaddr, host_page_size);
         if (align_up_checked(mem_end, host_page_size, &map_end))
             return STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW;
@@ -157,6 +167,8 @@ enum steamos_elf64_error steamos_elf64_parse(
     out_image->entry = eh.e_entry;
     out_image->load_min = min_addr;
     out_image->load_max = max_addr;
+    out_image->phent = eh.e_phentsize;
+    out_image->phnum = eh.e_phnum;
     out_image->elf_type = eh.e_type;
     out_image->load_count = load_count;
     return STEAMOS_ELF64_OK;

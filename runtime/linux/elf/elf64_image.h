@@ -49,6 +49,9 @@ struct steamos_elf64_image {
     uint64_t entry;
     uint64_t load_min;
     uint64_t load_max;
+    uint64_t phdr_virtual_address;
+    uint16_t phent;
+    uint16_t phnum;
     uint16_t elf_type;
     uint16_t load_count;
     struct steamos_elf64_segment load[STEAMOS_ELF64_MAX_LOAD_SEGMENTS];
