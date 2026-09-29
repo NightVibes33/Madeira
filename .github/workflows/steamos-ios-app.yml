@@ -1,0 +1,60 @@
+name: SteamOS-iOS clean app IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - "build/steamos-ios/TRIGGER_APP_BUILD"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-clean-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-app:
+    name: clean app + resignable IPA
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install clean-build prerequisites
+        run: brew install bison ninja sevenzip ccache
+
+      - name: Build every native dependency and app
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/steamos-ios/build-clean-app.sh
+
+      - name: Verify packaged artifact contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/SteamOS-iOS.ipa
+          test -s artifacts/SteamOS-iOS.ipa.sha256
+          test -s artifacts/build-info.json
+          test -s artifacts/SHA256SUMS
+          shasum -a 256 -c artifacts/SHA256SUMS
+          unzip -tq artifacts/SteamOS-iOS.ipa
+          echo "STEAMOS_IOS_IPA_ARTIFACT_OK"
+
+      - name: Upload SteamOS-iOS IPA and symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamOS-iOS-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            artifacts/SteamOS-iOS.ipa
+            artifacts/SteamOS-iOS.ipa.sha256
+            artifacts/build-info.json
+            artifacts/SHA256SUMS
+            build/steamos-ios-derived/Build/Products/Debug-iphoneos/Madeira.app.dSYM
