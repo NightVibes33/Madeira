@@ -1,4 +1,4 @@
-name: SteamOS-iOS LLVM iOS build gate
+name: SteamIOS LLVM iOS build gate
 
 on:
   push:

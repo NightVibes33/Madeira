@@ -1,4 +1,4 @@
-name: SteamOS-iOS component build gates
+name: SteamIOS component build gates
 
 on:
   push:

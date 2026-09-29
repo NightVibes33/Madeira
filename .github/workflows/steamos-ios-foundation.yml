@@ -1,4 +1,4 @@
-name: SteamOS-iOS Windows foundation gates
+name: SteamIOS Windows foundation gates
 
 on:
   workflow_dispatch:
@@ -222,7 +222,7 @@ jobs:
           grep -F '@Published var directTouch = true' app/Madeira/ContentView.swift
           grep -F '@Published var controllerOverlayEnabled = false' app/Madeira/ContentView.swift
           grep -F 'InputSettings.shared.controllerOverlayEnabled' app/Madeira/ContentView.swift
-          grep -F 'Notification.Name("SteamOS-iOS.SettingsRequested")' app/Madeira/ContentView.swift
+          grep -F 'Notification.Name("SteamIOS.SettingsRequested")' app/Madeira/ContentView.swift
 
       - name: Verify native iOS host plumbing
         shell: bash

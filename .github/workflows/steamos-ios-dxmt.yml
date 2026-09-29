@@ -1,4 +1,4 @@
-name: SteamOS-iOS DXMT iOS build gate
+name: SteamIOS DXMT iOS build gate
 
 on:
   push:

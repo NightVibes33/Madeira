@@ -1,4 +1,4 @@
-name: SteamOS-iOS Wine unix build gate
+name: SteamIOS Wine unix build gate
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: SteamOS-iOS runtime dependency gates
+name: SteamIOS runtime dependency gates
 
 on:
   push:

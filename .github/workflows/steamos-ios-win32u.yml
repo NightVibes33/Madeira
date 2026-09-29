@@ -1,4 +1,4 @@
-name: SteamOS-iOS win32u fast gate
+name: SteamIOS win32u fast gate
 
 on:
   push:
