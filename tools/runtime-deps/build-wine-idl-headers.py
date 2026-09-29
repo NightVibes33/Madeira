@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 IMPORT_RE = re.compile(r'^\s*import\s+"([^"]+)"\s*;', re.MULTILINE)
-CPP_HEADER_RE = re.compile(r'cpp_quote\("\\#include \\\\"([^\\"]+\\.h)\\\\"\ "\)'.replace(" \", "\"))
+CPP_HEADER_RE = re.compile(r'cpp_quote\\("#include \\\\"([^"]+\\.h)\\\\""\\)')
 
 
 def fail(message: str) -> "NoReturn":
