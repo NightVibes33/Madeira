@@ -54,7 +54,7 @@ require('setenv("WINE_IOS_JIT_SIZE"', CONTENT, "real Wine JIT pool size")
 require("JIT attach timed out after", STIK, "bounded JIT attach timeout")
 require('productState = .failed("Local JIT/Metal runtime validation failed.', CONTENT,
         "visible runtime-gate failure")
-require('productState = .failed("Executable JIT memory pool allocation failed.', CONTENT,
+require('productState = .failed("Executable JIT pool setup failed after JIT attached.', CONTENT,
         "visible JIT-pool failure")
 
 # Full-screen touch works without the optional virtual controller.
