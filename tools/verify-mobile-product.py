@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static shipping-contract checks for the SteamOS-iOS mobile product surface."""
+"""Static shipping-contract checks for the SteamIOS mobile product surface."""
 
 from pathlib import Path
 import plistlib
@@ -25,7 +25,7 @@ def forbid(needle: str, haystack: str, label: str) -> None:
         raise SystemExit(f"MOBILE_CONTRACT_FAIL: forbidden {label}: {needle}")
 
 # Shipping root is Steam, not the old Madeira diagnostics/tooling surface.
-require("struct SteamOSiOSApp: App", APP, "SteamOS-iOS app root")
+require("struct SteamIOSApp: App", APP, "SteamIOS app root")
 require("var body: some View {\n        steamProductBody", CONTENT, "Steam-only ContentView root")
 require("startSteamAutomatically()", CONTENT, "automatic Steam startup")
 require('case .startingJIT: return "Starting Steam"', CONTENT, "Steam startup UI")
@@ -106,8 +106,8 @@ require("canBecomeFirstResponder", CONTENT, "UIKit keyboard responder")
 require("winios_post_key", CONTENT, "Windows key bridge")
 
 # iPhone/iPad packaging + orientation contract.
-if INFO.get("CFBundleDisplayName") != "SteamOS-iOS":
-    raise SystemExit("MOBILE_CONTRACT_FAIL: CFBundleDisplayName is not SteamOS-iOS")
+if INFO.get("CFBundleDisplayName") != "SteamIOS":
+    raise SystemExit("MOBILE_CONTRACT_FAIL: CFBundleDisplayName is not SteamIOS")
 if INFO.get("UIRequiresFullScreen") is not True:
     raise SystemExit("MOBILE_CONTRACT_FAIL: UIRequiresFullScreen must be true")
 caps = INFO.get("UIRequiredDeviceCapabilities", [])
@@ -137,4 +137,4 @@ require("setActive:YES", WINE, "AVAudioSession activation")
 if not (ROOT / "build/ntdll-unix/audio_null_ios.c").is_file():
     raise SystemExit("MOBILE_CONTRACT_FAIL: iOS RemoteIO audio driver missing")
 
-print("STEAMOS_IOS_MOBILE_SHIPPING_CONTRACT_OK")
+print("STEAMIOS_MOBILE_SHIPPING_CONTRACT_OK")
