@@ -63,7 +63,9 @@ if count < 2:
 print(f"VCRUNTIME_CAB_CARVE_OK count={count}")
 PY
 
-# Extract each carved cabinet and recursively unpack any nested CAB payloads.
+# Extract each carved Burn cabinet and recursively unpack nested CAB and MSI
+# payloads. Keep archive paths in their original extracted directories: MSI
+# packages reference sibling cab1.cab files by relative path.
 python3 - "$TREE/containers" "$TREE/extracted" "$(command -v 7zz)" <<'PY'
 from __future__ import annotations
 import hashlib, pathlib, subprocess, sys
@@ -71,41 +73,67 @@ import hashlib, pathlib, subprocess, sys
 containers = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 seven = sys.argv[3]
-queue = sorted(containers.glob("*.cab"))
-seen = set()
+
+CAB_MAGIC = b"MSCF"
+CFB_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")  # MSI/OLE compound file
+
+queue: list[pathlib.Path] = sorted(containers.glob("*.cab"))
+seen: set[str] = set()
 index = 0
+discovered = {"cab": 0, "msi": 0}
+
+def kind(path: pathlib.Path) -> str | None:
+    try:
+        head = path.read_bytes()[:8]
+    except OSError:
+        return None
+    if head[:4] == CAB_MAGIC:
+        return "cab"
+    if head == CFB_MAGIC:
+        return "msi"
+    return None
 
 while index < len(queue):
-    if len(queue) > 64:
-        raise SystemExit("unexpected VC runtime cabinet nesting (>64)")
-    cab = queue[index]
-    data = cab.read_bytes()
+    if len(queue) > 128:
+        raise SystemExit("unexpected VC runtime archive nesting (>128)")
+    archive = queue[index]
+    data = archive.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     if digest in seen:
         index += 1
         continue
     seen.add(digest)
 
-    dest = root / f"cab-{index:02d}"
+    archive_kind = kind(archive) or "archive"
+    dest = root / f"{index:03d}-{archive_kind}"
     dest.mkdir(parents=True, exist_ok=True)
-    subprocess.run([seven, "x", "-y", str(cab), f"-o{dest}"],
-                   check=True, stdout=subprocess.DEVNULL)
+
+    result = subprocess.run(
+        [seven, "x", "-y", str(archive), f"-o{dest}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode:
+        raise SystemExit(
+            f"7-Zip failed extracting {archive_kind} {archive}:\n{result.stderr[-4000:]}"
+        )
 
     for p in sorted(dest.rglob("*")):
         if not p.is_file():
             continue
-        try:
-            data = p.read_bytes()
-        except OSError:
+        k = kind(p)
+        if k is None:
             continue
-        if data[:4] != b"MSCF":
-            continue
-        nested = root / f"nested-{len(queue):02d}.cab"
-        nested.write_bytes(data)
-        queue.append(nested)
+        queue.append(p)  # preserve directory so MSI can resolve sibling CABs
+        discovered[k] += 1
     index += 1
 
-print(f"VCRUNTIME_CAB_EXTRACT_OK unique={len(seen)} queued={len(queue)}")
+print(
+    "VCRUNTIME_ARCHIVE_EXTRACT_OK "
+    f"unique={len(seen)} queued={len(queue)} "
+    f"nested_cab={discovered['cab']} nested_msi={discovered['msi']}"
+)
 PY
 
 rm -rf "$OUT"
