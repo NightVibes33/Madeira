@@ -69,7 +69,11 @@ def visit(name: str) -> None:
             fail(f"malformed cpp_quote include in {name}: {line}")
         header = line[start:end]
         candidate = str(pathlib.PurePosixPath(header).with_suffix(".idl"))
-        if (include / candidate).is_file():
+        if (include / candidate).is_file() and candidate not in visiting:
+            # Generated headers can mutually include one another even though
+            # their IDL import graph itself is acyclic. An already-visiting
+            # cpp_quote dependency is therefore satisfied by the current
+            # generation batch and is not an IDL import cycle.
             visit(candidate)
     visiting.remove(name)
     seen.add(name)
