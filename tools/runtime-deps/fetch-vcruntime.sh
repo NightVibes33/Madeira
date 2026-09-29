@@ -30,19 +30,24 @@ fi
 echo "VCRUNTIME_INSTALLER_PIN_OK version=$VERSION sha256=$SHA256"
 
 mkdir -p "$TREE/exe"
-7zz x -y "$EXE" "-o$TREE/exe" >/dev/null
+7zz x -y -tPE "$EXE" "-o$TREE/exe" >/dev/null
 
 # 7-Zip exposes Burn's embedded cabinets as PE resources. Newer installers do
 # not consistently preserve a .cab suffix there, so extract every resource
 # beneath a CABINET directory regardless of its filename.
 cab_resource_count=0
+resource_index=0
 while IFS= read -r -d '' a; do
-  cab_resource_count=$((cab_resource_count + 1))
-  dest="$TREE/cab-resource-$cab_resource_count"
+  resource_index=$((resource_index + 1))
+  dest="$TREE/pe-resource-$resource_index"
   mkdir -p "$dest"
-  7zz x -y "$a" "-o$dest" >/dev/null 2>&1 || true
-done < <(find "$TREE/exe" -type f -path '*/.rsrc/*/CABINET/*' -print0)
-echo "VCRUNTIME_CAB_RESOURCES count=$cab_resource_count"
+  if 7zz x -y "$a" "-o$dest" >/dev/null 2>&1; then
+    cab_resource_count=$((cab_resource_count + 1))
+  else
+    rmdir "$dest" 2>/dev/null || true
+  fi
+done < <(find "$TREE/exe/.rsrc" -type f -print0 2>/dev/null || true)
+echo "VCRUNTIME_ARCHIVE_RESOURCES extracted=$cab_resource_count scanned=$resource_index"
 if [ "$cab_resource_count" -eq 0 ]; then
   echo "=== VC_redist 7-Zip listing (diagnostic) ===" >&2
   7zz l "$EXE" 2>&1 | sed -n '1,260p' >&2 || true
