@@ -48,6 +48,15 @@ bash build/ntdll-unix/build.sh
 bash build/win32u-unix/build.sh
 
 bash build/llvm-ios/build.sh
+
+# Xcode 27 ships the Metal compiler as an optional component on hosted runners.
+# DXMT's embedded AIR shader headers require it even though final presentation
+# targets iPhoneOS.
+if ! xcrun --sdk macosx --find metal >/dev/null 2>&1; then
+  xcodebuild -downloadComponent MetalToolchain
+fi
+xcrun --sdk macosx --find metal >/dev/null
+xcrun --sdk macosx --find metallib >/dev/null
 bash build/dxmt-ios/build.sh
 bash build/stage-licenses.sh
 
