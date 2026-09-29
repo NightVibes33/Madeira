@@ -1,0 +1,72 @@
+name: SteamOS-iOS DXMT iOS build gate
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-dxmt.yml"
+      - ".gitmodules"
+      - "build/dxmt-ios/**"
+      - "build/madeira-d3d12/**"
+      - "research/madeira-d3d12/**"
+      - "build/llvm-ios/**"
+      - "tools/runtime-deps/fetch-llvm-project.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-dxmt-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dxmt-ios-clean:
+    name: clean DXMT + airconv archive for iOS
+    runs-on: xcode-27
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned DXMT
+        run: git submodule update --init --depth 1 research/dxmt
+
+      - name: Verify frozen pins
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Install build tool
+        run: brew install ninja
+
+      - name: Materialize pinned llvm-project
+        run: bash tools/runtime-deps/fetch-llvm-project.sh
+
+      - name: Build LLVM iOS dependency
+        run: bash build/llvm-ios/build.sh
+
+      - name: Verify tracked Metal Shader Converter inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build/madeira-d3d12/deps.sh
+          test -d "$MSC_INCLUDE"
+          test -s "$MSC_LIB_IOS"
+          lipo -info "$MSC_LIB_IOS" | grep -q arm64
+          echo "MSC_IOS_INPUTS_OK"
+
+      - name: Build DXMT unix + native D3D9 + shader conversion archive
+        run: bash build/dxmt-ios/build.sh
+
+      - name: Verify staged DXMT archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/dxmt-ios/libdxmt_combined.a
+          test -s app/Madeira/libdxmt_combined.a
+          cmp build/dxmt-ios/libdxmt_combined.a app/Madeira/libdxmt_combined.a
+          lipo -info app/Madeira/libdxmt_combined.a | grep -q arm64
+          members="$(ar -t app/Madeira/libdxmt_combined.a | awk '/\.o$/ {n++} END {print n+0}')"
+          test "$members" -ge 50
+          nm -g app/Madeira/libdxmt_combined.a | grep -q 'dxmt_winemetal_unix_call_funcs'
+          echo "DXMT_IOS_CLEAN_BUILD_OK members=$members"
