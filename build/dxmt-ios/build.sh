@@ -15,7 +15,10 @@ SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 OBJ_DIR="$BUILD_DIR/obj"
 OUT_LIB="$BUILD_DIR/libdxmt_unix.a"
 
+python3 "$REPO_ROOT/tools/patches/apply-dxmt-ios-xcode27.py" "$DXMT_ROOT"
 mkdir -p "$OBJ_DIR"
+
+python3 "$BUILD_DIR/apply-xcode27-source-fixes.py" "$DXMT_ROOT"
 
 COMMON_FLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=18.0 -fblocks -O2"
 INCLUDES="-I$DXMT_ROOT/include -I$DXMT_ROOT/libs -I$DXMT_SRC/winemetal -I$DXMT_SRC/airconv"
@@ -57,6 +60,16 @@ SUCCEEDED=0
 FAILED=0
 FAILED_FILES=""
 
+report_compile_failure() {
+    local name=$1
+    echo "FAILED"
+    echo "----- $name compiler diagnostics -----" >&2
+    sed -n '1,260p' "$OBJ_DIR/$name.err" >&2 || true
+    echo "----- end $name diagnostics -----" >&2
+    FAILED=$((FAILED+1))
+    FAILED_FILES="$FAILED_FILES $name"
+}
+
 compile_objc() {
     local src=$1 name=$2
     # MADEIRA_ONLY=<name>: recompile one object only. madeira_ir_unix carries a __DATE__
@@ -67,7 +80,7 @@ compile_objc() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -81,7 +94,7 @@ compile_cxx() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -94,7 +107,7 @@ compile_madeira_cxx() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -106,7 +119,7 @@ compile_madeira_c() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -124,7 +137,7 @@ compile_objcxx_arc() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 if [[ -f "$BUILD_DIR/../madeira-d3d12/deps.sh" ]] && \
@@ -164,6 +177,18 @@ echo "=== winemetal unix (Objective-C) ==="
 compile_objc "$DXMT_SRC/winemetal/unix/winemetal_unix.c" winemetal_unix
 compile_objc "$DXMT_SRC/winemetal/unix/cache.c"          cache
 
+echo "=== airconv embedded Metal helper AIR ==="
+mkdir -p "$BUILD_DIR/shader-headers"
+for shader in air_msad air_samplepos air_tessellation; do
+    src="$DXMT_SRC/airconv/shaders/$shader.metal"
+    air="$BUILD_DIR/shader-headers/$shader.air"
+    hdr="$BUILD_DIR/shader-headers/$shader.h"
+    xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0         -o "$air" -c "$src"
+    xxd -n "$shader" -i "$air" "$hdr"
+    test -s "$hdr"
+    echo "  $shader.h                               OK"
+done
+
 echo "=== airconv (C++ 20, needs LLVM headers) ==="
 for cpp in airconv_context.cpp air_type.cpp air_signature.cpp air_operations.cpp \
            dxbc_converter.cpp dxbc_converter_gs.cpp dxbc_converter_ts.cpp \
@@ -187,7 +212,7 @@ for cpp in BlobContainer.cpp DXBCUtils.cpp ShaderBinary.cpp; do
             -c "$DXMT_ROOT/libs/DXBCParser/$cpp" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 done
 
@@ -289,13 +314,20 @@ echo "Built: $OUT_LIB ($(wc -c < "$OUT_LIB" | tr -d ' ') bytes)"
 # here reaches nothing: the app would keep linking the previous objects and the
 # build would look clean. Replace our members in place and re-index.
 COMBINED="$BUILD_DIR/libdxmt_combined.a"
+APP_COPY="$REPO_ROOT/app/Madeira/libdxmt_combined.a"
 if [ -f "$COMBINED" ]; then
     echo "=== Refreshing libdxmt_combined.a ==="
     xcrun -sdk iphoneos ar r "$COMBINED" "$OBJ_DIR"/*.o
     xcrun -sdk iphoneos ranlib "$COMBINED"
-    echo "Refreshed: $COMBINED ($(wc -c < "$COMBINED" | tr -d ' ') bytes)"
-    APP_COPY="$REPO_ROOT/app/Madeira/libdxmt_combined.a"
-    if [ -f "$APP_COPY" ]; then cp "$COMBINED" "$APP_COPY"; echo "Staged: $APP_COPY"; fi
 else
-    echo "NOTE: $COMBINED absent; the app links that file, so build it before deploying."
+    echo "=== Creating clean libdxmt_combined.a ==="
+    LLVM_LIB_DIR="$REPO_ROOT/toolchains/llvm-ios-build/lib"
+    if ! compgen -G "$LLVM_LIB_DIR/*.a" >/dev/null; then
+        echo "ERROR: no iOS LLVM archives in $LLVM_LIB_DIR" >&2
+        exit 1
+    fi
+    xcrun -sdk iphoneos libtool -static -o "$COMBINED"         "$OBJ_DIR"/*.o "$LLVM_LIB_DIR"/*.a
 fi
+echo "Combined: $COMBINED ($(wc -c < "$COMBINED" | tr -d ' ') bytes)"
+cp "$COMBINED" "$APP_COPY"
+echo "Staged: $APP_COPY"

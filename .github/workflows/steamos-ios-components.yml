@@ -1,0 +1,87 @@
+name: SteamOS-iOS component build gates
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-components.yml"
+      - ".gitmodules"
+      - "build/fex-ios/**"
+      - "build/wineserver/**"
+      - "tools/bootstrap/**"
+      - "tools/patches/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-components-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wineserver-clean:
+    name: clean-clone wineserver archive
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned Wine only
+        run: git submodule update --init --depth 1 wine
+
+      - name: Install host build tools
+        run: brew install bison
+
+      - name: Fetch pinned llvm-mingw
+        run: bash tools/bootstrap/fetch-llvm-mingw.sh
+
+      - name: Build pristine iOS wineserver base
+        run: |
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wineserver/bootstrap-base.sh
+
+      - name: Apply Madeira wineserver replacements
+        run: |
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wineserver/build.sh all
+
+      - name: Verify staged archive
+        run: |
+          test -s app/Madeira/libwineserver.a
+          file app/Madeira/libwineserver.a
+          count="$(ar -t app/Madeira/libwineserver.a | wc -l | tr -d ' ')"
+          test "$count" -ge 40
+          echo "WINESERVER_CLEAN_BUILD_OK members=$count"
+
+  fex-ios-clean:
+    name: clean-clone FEX iOS archives
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned FEX recursively
+        run: git submodule update --init --recursive --depth 1 FEX
+
+      - name: Verify pins including rpmalloc
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Install FEX build prerequisites
+        run: brew install ccache
+
+      - name: Build FEXCore for iOS
+        run: bash build/fex-ios/build.sh
+
+      - name: Verify app link inputs
+        run: |
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore.a
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
+          test -s FEX/build-ios/FEXCore/Source/libJemallocLibs.a
+          test -s FEX/build-ios/External/fmt/libfmt.a
+          test -s FEX/build-ios/External/cephes/libcephes_128bit.a
+          test -s FEX/build-ios/External/SoftFloat-3e/libsoftfloat_3e.a
+          test -s FEX/build-ios/External/xxhash/cmake_unofficial/libxxhash.a
+          echo "FEX_IOS_CLEAN_BUILD_OK"

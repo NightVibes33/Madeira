@@ -1,0 +1,108 @@
+name: SteamOS-iOS foundation gates
+
+on:
+  push:
+    branches: [main, steamos-ios]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    name: Pins + ELF L0 host gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify frozen Madeira ancestry and submodule pins
+        run: python3 tools/verify-madeira-pins.py
+
+      - name: Run deterministic ELF64 parser/fixture tests
+        run: bash tests/elf/run.sh
+
+      - name: Run deterministic Linux syscall dispatcher tests
+        run: bash tests/linux-syscalls/run.sh
+
+      - name: Run deterministic Linux process stack tests
+        run: bash tests/linux-process/run.sh
+
+      - name: Verify committed L0 fixture is generated, not hand-edited
+        run: |
+          tmp="$(mktemp -d)"
+          python3 tests/elf/gen_static_smoke.py --elf "$tmp/smoke.elf" --header "$tmp/smoke.h"
+          cmp "$tmp/smoke.h" app/Madeira/steamos_ios_static_smoke.h
+          grep -aF 'STEAMOS_IOS_ELF_OK' "$tmp/smoke.elf"
+
+      - name: Reject VM/full-system dependencies in new Linux personality
+        run: |
+          if grep -RniE \
+            --include='*.c' --include='*.cc' --include='*.cpp' --include='*.h' \
+            --include='*.m' --include='*.mm' --include='*.py' --include='*.sh' \
+            'qemu-system|utm[[:space:]]+vm|full-system[[:space:]]+emulat' \
+            runtime/linux tests/elf tests/linux-syscalls; then
+            echo "Forbidden full-system dependency found in executable SteamOS-iOS Linux code" >&2
+            exit 1
+          fi
+
+  macos-source:
+    name: Xcode 27 source gate
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "IPHONEOS_SDK=$sdk"
+          [[ "$sdk" == 27.* ]]
+          clang --version
+
+      - name: Verify project enumerates
+        run: xcodebuild -project app/Madeira.xcodeproj -list
+
+      - name: Re-run L0 parser with Apple clang
+        run: bash tests/elf/run.sh
+
+      - name: Verify SteamOS-iOS FEX discriminator is wired
+        run: |
+          grep -F '#include "steamos_ios_static_smoke.h"' app/Madeira/FEXBridge.mm
+          grep -F '#include "../../runtime/linux/elf/elf64_image.h"' app/Madeira/FEXBridge.mm
+          grep -F 'steamos_elf64_parse' app/Madeira/FEXBridge.mm
+          grep -F 'elf64_image.c in Sources' app/Madeira.xcodeproj/project.pbxproj
+          grep -F 'STEAMOS_IOS_L0_PASS' app/Madeira/FEXBridge.mm
+          grep -F 'steamos_ios_static_smoke_elf' app/Madeira/FEXBridge.mm
+          grep -F 'case 0:' app/Madeira/ContentView.swift
+          grep -F 'STEAMOS_IOS_L0_PASS: x86-64 Linux ELF wrote STEAMOS_IOS_ELF_OK and exited 0' app/Madeira/ContentView.swift
+
+  ios27-sdk:
+    name: Xcode 27 / iOS 27 SDK gate
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify target Apple toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "IPHONEOS_SDK=$sdk"
+          [[ "$sdk" == 27.* ]]
+          xcodebuild -project app/Madeira.xcodeproj -list
+
+      - name: Re-run Linux L0 parser under Xcode 27 clang
+        run: bash tests/elf/run.sh

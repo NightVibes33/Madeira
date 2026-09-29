@@ -1,0 +1,71 @@
+name: SteamOS-iOS clean app + IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-app.yml"
+      - "build/steamos-ios/TRIGGER_APP_BUILD"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-clean-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-app:
+    name: clean Debug iPhoneOS app and IPA
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install host build prerequisites
+        run: brew install bison ccache ninja sevenzip
+
+      - name: Verify Xcode 27 and install Metal Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          [[ "$sdk" == 27.* ]]
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+          echo "CLEAN_APP_TOOLCHAIN_OK sdk=$sdk"
+
+      - name: Rebuild all native inputs and package unsigned Debug IPA
+        shell: bash
+        run: bash build/steamos-ios/build-clean-app.sh
+
+      - name: Verify packaged IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/SteamOS-iOS.ipa
+          test -s artifacts/SteamOS-iOS.ipa.sha256
+          test -s artifacts/build-info.json
+          test -s artifacts/SHA256SUMS
+          (cd artifacts && shasum -a 256 -c SHA256SUMS)
+          unzip -tq artifacts/SteamOS-iOS.ipa
+          unzip -Z1 artifacts/SteamOS-iOS.ipa | grep -q '^Payload/[^/]*\.app/Info.plist$'
+          echo "STEAMOS_IOS_IPA_GATE_OK"
+
+      - name: Upload SteamOS-iOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamOS-iOS-Debug-unsigned
+          path: |
+            artifacts/SteamOS-iOS.ipa
+            artifacts/SteamOS-iOS.ipa.sha256
+            artifacts/build-info.json
+            artifacts/SHA256SUMS
+            build/steamos-ios-derived/Build/Products/Debug-iphoneos/Madeira.app.dSYM
+          if-no-files-found: error
+          compression-level: 0

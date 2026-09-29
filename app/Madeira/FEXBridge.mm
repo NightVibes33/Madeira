@@ -3,6 +3,9 @@
 
 #include "FEXBridge.h"
 #include "JITAllocator.h"
+#include "../../runtime/linux/elf/elf64_image.h"
+#include "../../runtime/linux/syscalls/syscall_dispatch.h"
+#include "../../runtime/linux/process/initial_stack.h"
 
 // Xcode defines DEBUG=1 in debug builds which conflicts with FEX's LogMan::DEBUG enum
 #ifdef DEBUG
@@ -39,8 +42,9 @@
 #include <execinfo.h>
 #include <signal.h>
 
-// Embedded x86-64 ELF binary (Hello World, statically linked)
+// Existing Madeira regression fixture plus the SteamOS-iOS L0 fixture.
 #include "hello_x86.h"
+#include "steamos_ios_static_smoke.h"
 
 // __clear_cache is a compiler-rt builtin for icache invalidation.
 // On iOS ARM64 we provide it via sys_icache_invalidate.
@@ -214,6 +218,67 @@ static jmp_buf g_exit_jmp;
 static int64_t g_exit_code = 0;
 static bool g_exit_jmp_set = false;
 
+// SteamOS-iOS L0 captures guest stdout so success requires the guest to have
+// actually executed its Linux write(2) syscall with the exact discriminator.
+static constexpr char kSteamOSL0Expected[] = "STEAMOS_IOS_ELF_OK\n";
+static char g_guest_stdout_capture[256] = {};
+static size_t g_guest_stdout_capture_size = 0;
+static bool g_guest_stdout_capture_enabled = false;
+
+struct FEXLinuxSyscallContext {
+    FEXCore::Core::CpuStateFrame *Frame;
+};
+
+static int64_t fex_linux_write(void *, uint64_t fd_raw, uint64_t buf_raw, uint64_t count_raw) {
+    const int fd = static_cast<int>(fd_raw);
+    const char *buf = reinterpret_cast<const char *>(buf_raw);
+    const size_t count = static_cast<size_t>(count_raw);
+
+    if (fd != 1 && fd != 2) return -STEAMOS_LINUX_EBADF;
+
+    if (fd == 1 && g_guest_stdout_capture_enabled) {
+        const size_t available = sizeof(g_guest_stdout_capture) - g_guest_stdout_capture_size;
+        const size_t copy_size = count < available ? count : available;
+        if (copy_size) {
+            memcpy(g_guest_stdout_capture + g_guest_stdout_capture_size, buf, copy_size);
+            g_guest_stdout_capture_size += copy_size;
+        }
+    }
+    fex_log("[x86 write fd=%d] %.*s", fd, (int)count, buf);
+    return static_cast<int64_t>(count);
+}
+
+static void fex_linux_exit(void *opaque, int64_t status, int is_group_exit) {
+    auto *ctx = static_cast<FEXLinuxSyscallContext *>(opaque);
+    fex_log("[x86] %s(%lld)", is_group_exit ? "exit_group" : "exit", (long long)status);
+    g_exit_code = status;
+
+    if (g_exit_jmp_set) {
+        fex_log("[x86] Escaping via longjmp (exit code %lld)", g_exit_code);
+        longjmp(g_exit_jmp, 1);
+    }
+
+    fex_log("[x86] WARNING: longjmp not set, trying InterruptFaultPage fallback");
+    if (ctx && ctx->Frame && ctx->Frame->Thread) {
+        auto *Thread = ctx->Frame->Thread;
+        ::mprotect(&Thread->InterruptFaultPage, sizeof(Thread->InterruptFaultPage), PROT_NONE);
+    }
+}
+
+static void fex_linux_missing(void *, uint64_t number, const uint64_t args[6]) {
+    fex_log("[linux-syscall-missing] number=%llu a0=0x%llx a1=0x%llx a2=0x%llx",
+            (unsigned long long)number,
+            (unsigned long long)args[0],
+            (unsigned long long)args[1],
+            (unsigned long long)args[2]);
+}
+
+static const steamos_linux_syscall_ops g_linux_syscall_ops = {
+    fex_linux_write,
+    fex_linux_exit,
+    fex_linux_missing,
+};
+
 // ---------------------------------------------------------------------------
 // Minimal SyscallHandler for FEXCore
 // Handles basic syscalls so FEXCore can initialize and run trivial x86 code
@@ -228,51 +293,14 @@ public:
 
     uint64_t HandleSyscall(FEXCore::Core::CpuStateFrame *Frame, FEXCore::HLE::SyscallArguments *Args) override {
         syscall_count.fetch_add(1);
-        // Args[0] = RAX (syscall number), Args[1] = RDI, Args[2] = RSI, Args[3] = RDX, ...
-        uint64_t SyscallNum = Args->Argument[0];
-
-        switch (SyscallNum) {
-        case 1: { // sys_write(fd, buf, count)
-            // Args layout: [0]=RAX (syscall num), [1]=RDI (fd), [2]=RSI (buf), [3]=RDX (count)
-            int fd = static_cast<int>(Args->Argument[1]);
-            auto buf = reinterpret_cast<const char*>(Args->Argument[2]);
-            size_t count = Args->Argument[3];
-
-            // NOTE: On non-Windows, syscall does NOT have FLAGS_BLOCK_END.
-            // The JIT-compiled block continues past the syscall instruction.
-            // Do NOT modify Frame->State.rip here — the JIT handles continuation.
-
-            if (fd == 1 || fd == 2) {
-                // stdout/stderr
-                fex_log("[x86 write fd=%d] %.*s", fd, (int)count, buf);
-                return count;
-            }
-            return -1; // EPERM
-        }
-        case 60: // sys_exit
-        case 231: { // sys_exit_group
-            // Args layout: [0]=RAX (syscall num), [1]=RDI (arg0), [2]=RSI, ...
-            fex_log("[x86] exit(%llu) via syscall %llu", Args->Argument[1], SyscallNum);
-            g_exit_code = static_cast<int64_t>(Args->Argument[1]);
-
-            if (g_exit_jmp_set) {
-                fex_log("[x86] Escaping via longjmp (exit code %lld)", g_exit_code);
-                longjmp(g_exit_jmp, 1);
-                // Does not return
-            }
-
-            // Fallback: try InterruptFaultPage (won't work with debugger attached)
-            fex_log("[x86] WARNING: longjmp not set, trying InterruptFaultPage fallback");
-            auto *Thread = Frame->Thread;
-            ::mprotect(&Thread->InterruptFaultPage, sizeof(Thread->InterruptFaultPage), PROT_NONE);
-            return 0;
-        }
-        default:
-            fex_log("[x86] Unhandled syscall %llu", SyscallNum);
-            // Do NOT modify rip — syscall is non-block-ending on non-Windows,
-            // so the JIT continues past it inline.
-            return -38; // ENOSYS
-        }
+        const uint64_t linux_args[6] = {
+            Args->Argument[1], Args->Argument[2], Args->Argument[3],
+            Args->Argument[4], Args->Argument[5], Args->Argument[6],
+        };
+        FEXLinuxSyscallContext context{Frame};
+        return static_cast<uint64_t>(
+            steamos_linux_dispatch_syscall(Args->Argument[0], linux_args,
+                                           &g_linux_syscall_ops, &context));
     }
 
     FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(
@@ -535,107 +563,107 @@ int64_t fex_test_execute(void) {
     }
 
     // ---------------------------------------------------------------------------
-    // ELF Loader: Load a statically-linked x86-64 ELF binary
+    // SteamOS-iOS ELF loader: hardened validation/load plan + FEX execution.
     // ---------------------------------------------------------------------------
-    struct Elf64_Ehdr {
-        uint8_t  e_ident[16];
-        uint16_t e_type, e_machine;
-        uint32_t e_version;
-        uint64_t e_entry, e_phoff, e_shoff;
-        uint32_t e_flags;
-        uint16_t e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx;
-    };
-    struct Elf64_Phdr {
-        uint32_t p_type;
-        uint32_t p_flags;
-        uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align;
-    };
-    constexpr uint32_t PT_LOAD = 1;
+    const uint8_t *elf_data = steamos_ios_static_smoke_elf;
+    const size_t elf_size = steamos_ios_static_smoke_elf_len;
 
-    const uint8_t *elf_data = hello_x86_elf;
-    size_t elf_size = hello_x86_elf_len;
-
-    auto *ehdr = reinterpret_cast<const Elf64_Ehdr*>(elf_data);
-
-    // Validate ELF
-    if (elf_size < sizeof(Elf64_Ehdr) ||
-        ehdr->e_ident[0] != 0x7f || ehdr->e_ident[1] != 'E' ||
-        ehdr->e_ident[2] != 'L'  || ehdr->e_ident[3] != 'F' ||
-        ehdr->e_ident[4] != 2    || // 64-bit
-        ehdr->e_machine != 0x3E) {  // x86-64
-        fex_log("FAIL: Invalid ELF binary");
+    steamos_elf64_image elf_image{};
+    const steamos_elf64_error elf_error =
+        steamos_elf64_parse(elf_data, elf_size, JIT_PAGE_SIZE, &elf_image);
+    if (elf_error != STEAMOS_ELF64_OK) {
+        fex_log("STEAMOS_IOS_L0_FAIL ELF parse: %s",
+                steamos_elf64_error_string(elf_error));
         running.store(false);
         return -1;
     }
 
-    fex_log("ELF: entry=0x%llx, %d program headers",
-            (unsigned long long)ehdr->e_entry, ehdr->e_phnum);
+    fex_log("ELF: entry=0x%llx, %u LOAD segments",
+            (unsigned long long)elf_image.entry,
+            (unsigned)elf_image.load_count);
 
-    // Find the address range spanned by all PT_LOAD segments
-    uint64_t load_min = UINT64_MAX, load_max = 0;
-    constexpr uint64_t page_mask = 0x3FFF; // 16KB iOS pages
-    for (int i = 0; i < ehdr->e_phnum && i < 8; i++) {
-        auto *phdr = reinterpret_cast<const Elf64_Phdr*>(elf_data + ehdr->e_phoff + i * ehdr->e_phentsize);
-        if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0) continue;
-        uint64_t seg_start = phdr->p_vaddr & ~page_mask;
-        uint64_t seg_end = (phdr->p_vaddr + phdr->p_memsz + page_mask) & ~page_mask;
-        if (seg_start < load_min) load_min = seg_start;
-        if (seg_end > load_max) load_max = seg_end;
+    const uint64_t load_span = elf_image.load_max - elf_image.load_min;
+    if (!load_span || load_span > SIZE_MAX) {
+        fex_log("STEAMOS_IOS_L0_FAIL invalid ELF load span: 0x%llx",
+                (unsigned long long)load_span);
+        running.store(false);
+        return -1;
     }
-    size_t total_map_size = load_max - load_min;
+    const size_t total_map_size = static_cast<size_t>(load_span);
     fex_log("ELF: address range [0x%llx, 0x%llx), total %zu bytes",
-            (unsigned long long)load_min, (unsigned long long)load_max, total_map_size);
+            (unsigned long long)elf_image.load_min,
+            (unsigned long long)elf_image.load_max,
+            total_map_size);
 
-    // Allocate a single contiguous region at any available address.
-    // iOS reserves low virtual addresses, so we let the OS choose.
+    // Guest ELF memory is data from the host's perspective; FEX translates
+    // x86-64 instructions into the separate RX/RW JIT arena.
     void *elf_base = ::mmap(nullptr, total_map_size, PROT_READ | PROT_WRITE,
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (elf_base == MAP_FAILED) {
-        fex_log("FAIL: Could not allocate %zu bytes for ELF: %s", total_map_size, strerror(errno));
+        fex_log("FAIL: Could not allocate %zu bytes for ELF: %s",
+                total_map_size, strerror(errno));
         running.store(false);
         return -1;
     }
 
-    // The offset to apply: actual_addr = original_vaddr - load_min + elf_base
-    int64_t load_bias = reinterpret_cast<int64_t>(elf_base) - static_cast<int64_t>(load_min);
-    fex_log("ELF: mapped at %p, load_bias=0x%llx (original base 0x%llx)",
-            elf_base, (unsigned long long)load_bias, (unsigned long long)load_min);
+    fex_log("ELF: mapped at %p (original base 0x%llx)",
+            elf_base, (unsigned long long)elf_image.load_min);
 
-    // Track for cleanup
     struct MappedRegion { void *addr; size_t size; };
-    MappedRegion mapped_regions[1];
-    mapped_regions[0] = {elf_base, total_map_size};
-    int num_mapped = 1;
+    MappedRegion mapped_regions[1] = {{elf_base, total_map_size}};
+    const int num_mapped = 1;
 
-    // Copy PT_LOAD segment data into the allocated region
-    for (int i = 0; i < ehdr->e_phnum && i < 8; i++) {
-        auto *phdr = reinterpret_cast<const Elf64_Phdr*>(elf_data + ehdr->e_phoff + i * ehdr->e_phentsize);
-        if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0) continue;
-
-        fex_log("ELF: LOAD vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=%c%c%c → actual 0x%llx",
-                (unsigned long long)phdr->p_vaddr,
-                (unsigned long long)phdr->p_filesz,
-                (unsigned long long)phdr->p_memsz,
-                (phdr->p_flags & 4) ? 'R' : '-',
-                (phdr->p_flags & 2) ? 'W' : '-',
-                (phdr->p_flags & 1) ? 'X' : '-',
-                (unsigned long long)(phdr->p_vaddr + load_bias));
-
-        // Copy file data at the biased address
-        if (phdr->p_filesz > 0) {
-            memcpy(reinterpret_cast<void*>(phdr->p_vaddr + load_bias),
-                   elf_data + phdr->p_offset, phdr->p_filesz);
+    for (uint16_t i = 0; i < elf_image.load_count; ++i) {
+        const steamos_elf64_segment &seg = elf_image.load[i];
+        uint64_t destination_address = 0;
+        const steamos_elf64_error map_error =
+            steamos_elf64_runtime_address(
+                &elf_image, reinterpret_cast<uint64_t>(elf_base),
+                seg.virtual_address, &destination_address);
+        if (map_error != STEAMOS_ELF64_OK) {
+            fex_log("STEAMOS_IOS_L0_FAIL segment mapping: %s",
+                    steamos_elf64_error_string(map_error));
+            ::munmap(elf_base, total_map_size);
+            running.store(false);
+            return -1;
         }
-        // BSS (memsz > filesz) is already zeroed by mmap
+        uint8_t *destination = reinterpret_cast<uint8_t *>(destination_address);
+
+        fex_log("ELF: LOAD vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=%c%c%c -> actual %p",
+                (unsigned long long)seg.virtual_address,
+                (unsigned long long)seg.file_size,
+                (unsigned long long)seg.memory_size,
+                (seg.flags & STEAMOS_ELF64_PF_R) ? 'R' : '-',
+                (seg.flags & STEAMOS_ELF64_PF_W) ? 'W' : '-',
+                (seg.flags & STEAMOS_ELF64_PF_X) ? 'X' : '-',
+                destination);
+
+        if (seg.file_size) {
+            memcpy(destination, elf_data + seg.file_offset,
+                   static_cast<size_t>(seg.file_size));
+        }
     }
 
-    uint64_t code_addr = ehdr->e_entry + load_bias;
-    fex_log("ELF loaded: entry point = 0x%llx (biased from 0x%llx), %d segments mapped",
-            (unsigned long long)code_addr, (unsigned long long)ehdr->e_entry, num_mapped);
+    uint64_t code_addr = 0;
+    const steamos_elf64_error entry_map_error =
+        steamos_elf64_runtime_address(
+            &elf_image, reinterpret_cast<uint64_t>(elf_base),
+            elf_image.entry, &code_addr);
+    if (entry_map_error != STEAMOS_ELF64_OK) {
+        fex_log("STEAMOS_IOS_L0_FAIL entry mapping: %s",
+                steamos_elf64_error_string(entry_map_error));
+        ::munmap(elf_base, total_map_size);
+        running.store(false);
+        return -1;
+    }
+    fex_log("ELF loaded: entry point = 0x%llx (guest 0x%llx), %d mapping",
+            (unsigned long long)code_addr,
+            (unsigned long long)elf_image.entry,
+            num_mapped);
 
-    // Verify entry point is readable
-    uint8_t firstByte = *reinterpret_cast<uint8_t*>(code_addr);
-    fex_log("First byte at entry 0x%llx: 0x%02x", (unsigned long long)code_addr, firstByte);
+    const uint8_t firstByte = *reinterpret_cast<const uint8_t *>(code_addr);
+    fex_log("First byte at entry 0x%llx: 0x%02x",
+            (unsigned long long)code_addr, firstByte);
 
     // Allocate a guest stack (separate from ELF segments)
     const uint64_t GUEST_STACK_SIZE = 0x10000; // 64KB
@@ -643,26 +671,56 @@ int64_t fex_test_execute(void) {
                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (stack_mem == MAP_FAILED) {
         fex_log("FAIL: Could not allocate guest stack");
+        for (int i = 0; i < num_mapped; ++i) {
+            ::munmap(mapped_regions[i].addr, mapped_regions[i].size);
+        }
         running.store(false);
         return -1;
     }
-    uint64_t stack_addr = reinterpret_cast<uint64_t>(stack_mem) + GUEST_STACK_SIZE;
+    uint64_t stack_addr = 0;
+    const char *guest_argv[] = {"steamos-ios-l0"};
+    steamos_linux_initial_stack_spec stack_spec{};
+    stack_spec.argv = guest_argv;
+    stack_spec.argc = 1;
+    stack_spec.page_size = JIT_PAGE_SIZE;
+    stack_spec.entry = code_addr;
+    stack_spec.phent = elf_image.phent;
+    stack_spec.phnum = elf_image.phnum;
+    if (elf_image.phdr_virtual_address) {
+        const steamos_elf64_error phdr_map_error =
+            steamos_elf64_runtime_address(
+                &elf_image, reinterpret_cast<uint64_t>(elf_base),
+                elf_image.phdr_virtual_address, &stack_spec.phdr);
+        if (phdr_map_error != STEAMOS_ELF64_OK) {
+            fex_log("STEAMOS_IOS_L0_FAIL PHDR mapping: %s",
+                    steamos_elf64_error_string(phdr_map_error));
+            ::munmap(elf_base, total_map_size);
+            ::munmap(stack_mem, GUEST_STACK_SIZE);
+            running.store(false);
+            return -1;
+        }
+    }
 
-    // Set up initial stack like the Linux kernel does for a static executable:
-    // RSP → argc (0)
-    //        argv[0] = NULL
-    //        envp[0] = NULL
-    //        AT_NULL (auxv terminator)
-    uint64_t *sp = reinterpret_cast<uint64_t*>(stack_addr);
-    *(--sp) = 0;    // AT_NULL value
-    *(--sp) = 0;    // AT_NULL type
-    *(--sp) = 0;    // envp[0] = NULL
-    *(--sp) = 0;    // argv[0] = NULL
-    *(--sp) = 0;    // argc = 0
-    stack_addr = reinterpret_cast<uint64_t>(sp);
+    const steamos_linux_stack_error stack_error =
+        steamos_linux_build_initial_stack(
+            stack_mem, GUEST_STACK_SIZE,
+            reinterpret_cast<uint64_t>(stack_mem),
+            &stack_spec, &stack_addr);
+    if (stack_error != STEAMOS_LINUX_STACK_OK) {
+        fex_log("STEAMOS_IOS_L0_FAIL initial stack: %s",
+                steamos_linux_stack_error_string(stack_error));
+        for (int i = 0; i < num_mapped; ++i) {
+            ::munmap(mapped_regions[i].addr, mapped_regions[i].size);
+        }
+        ::munmap(stack_mem, GUEST_STACK_SIZE);
+        running.store(false);
+        return -1;
+    }
 
-    fex_log("Stack at 0x%llx (base=%p, size=0x%x)",
-            (unsigned long long)stack_addr, stack_mem, GUEST_STACK_SIZE);
+    fex_log("Linux initial stack at 0x%llx (base=%p, size=0x%x, argc=1, AT_PHDR=0x%llx, AT_ENTRY=0x%llx)",
+            (unsigned long long)stack_addr, stack_mem, GUEST_STACK_SIZE,
+            (unsigned long long)stack_spec.phdr,
+            (unsigned long long)code_addr);
 
     // Create a thread for execution
     fex_log("Creating FEX thread (RIP=0x%llx, RSP=0x%llx)...",
@@ -679,12 +737,15 @@ int64_t fex_test_execute(void) {
 
     // Allocate call-ret shadow stack (needed for call/ret instructions).
     // On Linux this is done by LinuxEmulation/ThreadManager; on iOS we do it here.
+    void *callret_alloc = MAP_FAILED;
+    size_t callret_alloc_size = 0;
     {
         constexpr size_t CALLRET_STACK_SIZE = FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE; // 4MB
         constexpr size_t PAGE_SIZE = 0x4000; // 16KB iOS pages
         constexpr size_t ALLOC_SIZE = CALLRET_STACK_SIZE + 2 * PAGE_SIZE; // guard pages on both sides
+        callret_alloc_size = ALLOC_SIZE;
 
-        void *callret_alloc = ::mmap(nullptr, ALLOC_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        callret_alloc = ::mmap(nullptr, ALLOC_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (callret_alloc == MAP_FAILED) {
             fex_log("FAIL: Could not allocate call-ret stack");
             g_ctx->DestroyThread(Thread);
@@ -743,6 +804,9 @@ int64_t fex_test_execute(void) {
 
     g_exit_code = 0;
     g_exit_jmp_set = true;
+    g_guest_stdout_capture_size = 0;
+    memset(g_guest_stdout_capture, 0, sizeof(g_guest_stdout_capture));
+    g_guest_stdout_capture_enabled = true;
 
     iOSSyscallHandler::syscall_count.store(0);
     std::atomic<bool> execution_done{false};
@@ -762,8 +826,6 @@ int64_t fex_test_execute(void) {
         }
         fex_log("WATCHDOG: Execution timed out after 5s!");
     });
-    watchdog.detach();
-
     fex_log("Executing x86-64 code through FEXCore...");
 
     if (setjmp(g_exit_jmp) == 0) {
@@ -777,8 +839,12 @@ int64_t fex_test_execute(void) {
     }
 
     execution_done.store(true);
+    // The watchdog captures Thread and execution_done. Join it before either
+    // object goes out of scope; detaching here creates a use-after-scope race.
+    if (watchdog.joinable()) watchdog.join();
 
     g_exit_jmp_set = false;
+    g_guest_stdout_capture_enabled = false;
 
     // Read the exit code (set by SyscallHandler before longjmp)
     int64_t exit_code = g_exit_code;
@@ -790,20 +856,32 @@ int64_t fex_test_execute(void) {
     fex_log("CPU state: RAX=%lld, RDI=%lld", rax_val, rdi_val);
 
     g_ctx->DestroyThread(Thread);
+    if (callret_alloc != MAP_FAILED && callret_alloc_size) {
+        ::munmap(callret_alloc, callret_alloc_size);
+    }
     for (int i = 0; i < num_mapped; i++) {
         ::munmap(mapped_regions[i].addr, mapped_regions[i].size);
     }
     ::munmap(stack_mem, GUEST_STACK_SIZE);
 
-    if (exit_code == 0) {
-        fex_log("=== FEX ELF test PASSED: Hello World exited with code 0 ===");
+    const bool stdout_ok =
+        g_guest_stdout_capture_size == sizeof(kSteamOSL0Expected) - 1 &&
+        memcmp(g_guest_stdout_capture, kSteamOSL0Expected, sizeof(kSteamOSL0Expected) - 1) == 0;
+
+    if (exit_code == 0 && stdout_ok) {
+        fex_log("=== STEAMOS_IOS_L0_PASS output=STEAMOS_IOS_ELF_OK exit=0 ===");
         cached_result.store(0);
         running.store(false);
         return 0;
     }
 
+    if (!stdout_ok) {
+        fex_log("=== STEAMOS_IOS_L0_FAIL stdout mismatch: captured=%zu expected=%zu ===",
+                g_guest_stdout_capture_size, sizeof(kSteamOSL0Expected) - 1);
+    }
     fex_log("=== FEX ELF test result: exit_code=%lld, RAX=%lld, RDI=%lld ===", exit_code, rax_val, rdi_val);
-    cached_result.store(static_cast<int64_t>(exit_code));
+    const int64_t result = exit_code == 0 ? -2 : exit_code;
+    cached_result.store(result);
     running.store(false);
-    return static_cast<int64_t>(exit_code);
+    return result;
 }

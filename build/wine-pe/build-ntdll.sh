@@ -13,7 +13,13 @@ B="$R/wine/build-arm64ec"
 if [ ! -f "$B/config.status" ]; then
     mkdir -p "$B" && cd "$B" && ../configure --enable-archs=arm64ec --without-x --disable-tests
 fi
-cd "$B" && make -C dlls/ntdll
+cd "$B"
+# The native dwrite unix side includes dwrite_private.h, whose generated IDL
+# headers recursively depend on DirectWrite, Direct2D, DXGI and COM headers.
+# Generate the complete import closure from the pinned Wine source rather than
+# maintaining a brittle manual list.
+python3 "$R/tools/runtime-deps/build-wine-idl-headers.py" "$R/wine" "$B" dwrite_3.idl d2d1.idl
+make -C dlls/ntdll
 SRC="$B/dlls/ntdll/arm64ec-windows/ntdll.dll"; OUT="$R/app/Madeira/arm64ec-windows/ntdll.dll"
 cp "$SRC" "$OUT.tmp"
 "$TC/arm64ec-w64-mingw32-strip" "$OUT.tmp"
