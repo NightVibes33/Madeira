@@ -157,6 +157,17 @@ test -d "$APP"
 test -s "$APP/Info.plist"
 test -s "$APP/SteamIOS"
 
+bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+[ "$bundle_id" = "com.nightvibes33.steamios" ] || {
+  echo "error: packaged bundle id is '$bundle_id' (expected com.nightvibes33.steamios)" >&2
+  exit 1
+}
+test -s "$APP/Assets.car" || {
+  echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_IDENTITY_OK bundle=$bundle_id assets=$(stat -f%z "$APP/Assets.car")"
+
 /usr/bin/codesign --verify --verbose=2 "$APP/d3d12/libmetalirconverter.dylib" >/dev/null 2>&1 || {
   echo "error: bundled Metal Shader Converter dylib is not code-signed" >&2
   exit 1
