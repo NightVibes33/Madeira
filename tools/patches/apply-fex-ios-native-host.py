@@ -9,6 +9,7 @@ if len(sys.argv) != 2:
 
 root = pathlib.Path(sys.argv[1]).resolve()
 path = root / "FEXCore/Source/Utils/ArchHelpers/Arm64.cpp"
+allocator_path = root / "FEXCore/Source/Utils/AllocatorHooks.cpp"
 text = path.read_text()
 
 old = r'''  MEMORY_BASIC_INFORMATION mbi {};
@@ -55,13 +56,16 @@ if count != 1:
 
 text = text.replace(old, new, 1)
 
+path.write_text(text)
+
+allocator_text = allocator_path.read_text()
 allocator_bad = """#else
 void InitializeThread() {}
 
 void* malloc(size_t size) {
   return ::malloc(size);
 }"""
-if allocator_bad not in text:
+if allocator_bad not in allocator_text:
     raise SystemExit("error: pinned FEX allocator-disabled branch anchor drifted")
 
 guard_bad = """size_t malloc_usable_size(void* ptr) {
@@ -72,14 +76,14 @@ guard_good = """size_t malloc_usable_size(void* ptr) {
 #ifdef __APPLE__
   return ::malloc_size(ptr);"""
 
-if guard_good not in text:
-    count = text.count(guard_bad)
+if guard_good not in allocator_text:
+    count = allocator_text.count(guard_bad)
     if count != 1:
         raise SystemExit(
             f"error: pinned FEX allocator-disabled IOS_RPM_GUARD drift: "
             f"expected one exact block, found {count}"
         )
-    text = text.replace(guard_bad, guard_good, 1)
+    allocator_text = allocator_text.replace(guard_bad, guard_good, 1)
+    allocator_path.write_text(allocator_text)
 
-path.write_text(text)
-print(f"FEX_IOS_PATCH_OK applied={path}")
+print(f"FEX_IOS_PATCH_OK applied={path} allocator={allocator_path}")
