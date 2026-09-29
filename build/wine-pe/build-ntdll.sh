@@ -14,9 +14,11 @@ if [ ! -f "$B/config.status" ]; then
     mkdir -p "$B" && cd "$B" && ../configure --enable-archs=arm64ec --without-x --disable-tests
 fi
 cd "$B"
-# DXMT's ARM64EC side consumes these generated DirectWrite headers. A clean
-# configure + ntdll-only build does not materialize them automatically.
-make include/dwrite.h include/dwrite_3.h
+# The native dwrite unix side includes dwrite_private.h, whose generated IDL
+# headers recursively depend on DirectWrite, Direct2D, DXGI and COM headers.
+# Generate the complete import closure from the pinned Wine source rather than
+# maintaining a brittle manual list.
+python3 "$R/tools/runtime-deps/build-wine-idl-headers.py" "$R/wine" "$B" dwrite_3.idl d2d1.idl
 make -C dlls/ntdll
 SRC="$B/dlls/ntdll/arm64ec-windows/ntdll.dll"; OUT="$R/app/Madeira/arm64ec-windows/ntdll.dll"
 cp "$SRC" "$OUT.tmp"
