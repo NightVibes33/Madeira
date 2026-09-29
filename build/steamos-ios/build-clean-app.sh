@@ -22,6 +22,7 @@ for tool in cmake ninja meson python3 xcodebuild; do
 done
 echo "CLEAN_APP_HOST_TOOLS_OK"
 
+if [[ "${STEAMOS_SKIP_NATIVE_REBUILD:-0}" != "1" ]]; then
 # Clean-generated dependency sources.
 git submodule update --init --recursive --depth 1 FEX
 git submodule update --init --depth 1 wine
@@ -88,6 +89,10 @@ xcrun --sdk macosx --find metal >/dev/null
 xcrun --sdk macosx --find metallib >/dev/null
 bash build/dxmt-ios/build.sh
 bash build/stage-licenses.sh
+
+else
+  echo "STEAMOS_IOS_NATIVE_REBUILD_SKIPPED"
+fi
 
 # Fail before Xcode if any clean-generated link/resource input is absent.
 for f in app/Madeira/libwineserver.a app/Madeira/libntdll_unix.a app/Madeira/libwin32u_unix.a app/Madeira/libdxmt_combined.a; do

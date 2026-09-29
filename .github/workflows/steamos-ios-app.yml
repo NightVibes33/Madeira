@@ -40,8 +40,98 @@ jobs:
           xcrun --sdk macosx --find metallib
           echo "CLEAN_APP_TOOLCHAIN_OK sdk=$sdk"
 
-      - name: Rebuild all native inputs and package unsigned Debug IPA
+      - name: Materialize pinned sources and toolchains
         shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-madeira-pins.py
+          git submodule update --init --recursive --depth 1 FEX
+          git submodule update --init --depth 1 wine
+          git submodule update --init --depth 1 research/dxmt
+          git -C research/dxmt submodule update --init --recursive --depth 1 include/native/directx
+          bash tools/bootstrap/fetch-llvm-mingw.sh
+          bash tools/runtime-deps/fetch-freetype.sh
+          bash tools/runtime-deps/fetch-llvm-project.sh
+          bash tools/runtime-deps/fetch-vcruntime.sh
+          echo "STEAMOS_IOS_BOOTSTRAP_OK"
+
+      - name: Build iOS native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash build/gnutls-ios/build.sh
+          bash build/freetype-ios/build.sh
+          echo "STEAMOS_IOS_NATIVE_DEPS_OK"
+
+      - name: Build FEX Windows translators
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          PY_VENV="$PWD/build/steamos-python"
+          rm -rf "$PY_VENV"
+          python3 -m venv "$PY_VENV"
+          "$PY_VENV/bin/python" -m pip install --disable-pip-version-check --quiet 'packaging==24.2'
+          export PATH="$PY_VENV/bin:$PATH"
+          python3 -c 'from packaging.version import Version; assert Version("24.2") == Version("24.2")'
+          bash build/fex-arm64ec/build.sh
+          bash build/fex-wow64/build.sh
+          echo "STEAMOS_IOS_FEX_TRANSLATORS_OK"
+
+      - name: Configure Wine host headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          mkdir -p wine/build-macos
+          if [[ ! -f wine/build-macos/config.status ]]; then
+            (
+              cd wine/build-macos
+              ../configure --without-x --disable-tests
+            )
+          fi
+          echo "STEAMOS_IOS_WINE_HOST_CONFIG_OK"
+
+      - name: Build i386 Wine and DXMT Windows farm
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wine-i386/build.sh
+
+      - name: Build wineserver and Wine Unix bridges
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wineserver/bootstrap-base.sh
+          bash build/wineserver/build.sh all
+          bash build/wine-pe/build-ntdll.sh
+          bash build/ntdll-unix/build.sh
+          bash build/win32u-unix/build.sh
+          echo "STEAMOS_IOS_WINE_UNIX_OK"
+
+      - name: Build LLVM iOS runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/llvm-ios/build.sh
+
+      - name: Build DXMT iOS renderer and stage licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun --sdk macosx --find metal >/dev/null
+          xcrun --sdk macosx --find metallib >/dev/null
+          bash build/dxmt-ios/build.sh
+          bash build/stage-licenses.sh
+          echo "STEAMOS_IOS_DXMT_IOS_OK"
+
+      - name: Link app and package unsigned Debug IPA
+        shell: bash
+        env:
+          STEAMOS_SKIP_NATIVE_REBUILD: "1"
         run: bash build/steamos-ios/build-clean-app.sh
 
       - name: Verify packaged IPA
