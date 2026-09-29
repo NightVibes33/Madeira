@@ -1,0 +1,65 @@
+name: SteamOS-iOS win32u fast gate
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-win32u.yml"
+      - "build/win32u-unix/**"
+      - "tools/runtime-deps/build-wine-idl-headers.py"
+      - "tools/runtime-deps/fetch-freetype.sh"
+      - "build/freetype-ios/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-ios-win32u-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  win32u-clean:
+    name: fast clean win32u archive
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize pinned Wine
+        run: git submodule update --init --depth 1 wine
+
+      - name: Install host build tools
+        run: brew install bison
+
+      - name: Configure Wine host headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/bison/bin:$PATH"
+          mkdir -p wine/build-macos
+          (
+            cd wine/build-macos
+            ../configure --without-x --disable-tests
+          )
+          test -s wine/build-macos/include/config.h
+
+      - name: Fetch and build pinned FreeType
+        run: |
+          bash tools/runtime-deps/fetch-freetype.sh
+          bash build/freetype-ios/build.sh
+
+      - name: Build win32u archive
+        run: bash build/win32u-unix/build.sh
+
+      - name: Verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s app/Madeira/libwin32u_unix.a
+          members="$(ar -t app/Madeira/libwin32u_unix.a | awk '/\.o$/ {n++} END {print n+0}')"
+          test "$members" -ge 40
+          lipo -info app/Madeira/libwin32u_unix.a | grep -q arm64
+          echo "WIN32U_FAST_CLEAN_BUILD_OK members=$members"
