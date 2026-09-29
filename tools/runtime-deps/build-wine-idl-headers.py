@@ -58,13 +58,16 @@ def visit(name: str) -> None:
     # WIDL sources can emit extra generated-header dependencies through
     # cpp_quote("#include \\"foo.h\\"") *or* cpp_quote("#include <foo.h>").
     # Wine's D3D IDLs use both forms, so parse either delimiter explicitly.
-    cpp_marker = 'cpp_quote("#include '
+    cpp_marker = 'cpp_quote("#'
     for line in text.splitlines():
         start = line.find(cpp_marker)
         if start < 0:
             continue
         start += len(cpp_marker)
-        tail = line[start:]
+        tail = line[start:].lstrip()
+        if not tail.startswith("include"):
+            continue
+        tail = tail[len("include"):].lstrip()
 
         if tail.startswith("<"):
             end = tail.find(">", 1)
