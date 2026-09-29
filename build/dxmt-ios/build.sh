@@ -174,6 +174,18 @@ echo "=== winemetal unix (Objective-C) ==="
 compile_objc "$DXMT_SRC/winemetal/unix/winemetal_unix.c" winemetal_unix
 compile_objc "$DXMT_SRC/winemetal/unix/cache.c"          cache
 
+echo "=== airconv embedded Metal helper AIR ==="
+mkdir -p "$BUILD_DIR/shader-headers"
+for shader in air_msad air_samplepos air_tessellation; do
+    src="$DXMT_SRC/airconv/shaders/$shader.metal"
+    air="$BUILD_DIR/shader-headers/$shader.air"
+    hdr="$BUILD_DIR/shader-headers/$shader.h"
+    xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0         -o "$air" -c "$src"
+    xxd -n "$shader" -i "$air" "$hdr"
+    test -s "$hdr"
+    echo "  $shader.h                               OK"
+done
+
 echo "=== airconv (C++ 20, needs LLVM headers) ==="
 for cpp in airconv_context.cpp air_type.cpp air_signature.cpp air_operations.cpp \
            dxbc_converter.cpp dxbc_converter_gs.cpp dxbc_converter_ts.cpp \

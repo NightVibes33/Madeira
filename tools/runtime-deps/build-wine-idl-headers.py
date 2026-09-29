@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 IMPORT_RE = re.compile(r'^\s*import\s+"([^"]+)"\s*;', re.MULTILINE)
+CPP_HEADER_RE = re.compile(r'cpp_quote\("\\#include \\\\"([^\\"]+\\.h)\\\\"\ "\)'.replace(" \", "\"))
 
 
 def fail(message: str) -> "NoReturn":
@@ -50,6 +51,14 @@ def visit(name: str) -> None:
     for dep in IMPORT_RE.findall(text):
         if dep.endswith(".idl"):
             visit(dep)
+
+    # WIDL sources can emit extra generated-header dependencies through
+    # cpp_quote("#include \"foo.h\""). If foo.idl exists in Wine/include,
+    # it must be generated before consumers compile.
+    for header in CPP_HEADER_RE.findall(text):
+        candidate = str(pathlib.PurePosixPath(header).with_suffix(".idl"))
+        if (include / candidate).is_file():
+            visit(candidate)
     visiting.remove(name)
     seen.add(name)
     order.append(name)

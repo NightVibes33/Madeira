@@ -30,8 +30,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Materialize pinned DXMT
-        run: git submodule update --init --depth 1 research/dxmt
+      - name: Materialize pinned DXMT recursively
+        run: |
+          git submodule update --init --depth 1 research/dxmt
+          git -C research/dxmt submodule update --init --recursive --depth 1 include/native/directx
+          test -s research/dxmt/include/native/directx/d3d9.h
+          test -s research/dxmt/include/native/directx/d3d11.h
+          test -s research/dxmt/include/native/directx/dxgi.h
+          echo "DXMT_DIRECTX_HEADERS_OK"
 
       - name: Verify frozen pins
         run: python3 tools/verify-madeira-pins.py

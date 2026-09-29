@@ -12,6 +12,7 @@ on:
       - "build/gnutls-ios/**"
       - "build/freetype-ios/**"
       - "tools/runtime-deps/fetch-freetype.sh"
+      - "tools/runtime-deps/build-wine-idl-headers.py"
   workflow_dispatch:
 
 permissions:
