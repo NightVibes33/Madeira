@@ -9,7 +9,6 @@ import subprocess
 import sys
 
 IMPORT_RE = re.compile(r'^\s*import\s+"([^"]+)"\s*;', re.MULTILINE)
-CPP_HEADER_RE = re.compile(r'cpp_quote\\("#include \\\\"([^"]+\\.h)\\\\""\\)')
 
 
 def fail(message: str) -> "NoReturn":
@@ -53,9 +52,18 @@ def visit(name: str) -> None:
             visit(dep)
 
     # WIDL sources can emit extra generated-header dependencies through
-    # cpp_quote("#include \"foo.h\""). If foo.idl exists in Wine/include,
-    # it must be generated before consumers compile.
-    for header in CPP_HEADER_RE.findall(text):
+    # cpp_quote("#include \\"foo.h\\""). Parse this exact source syntax
+    # without a regex so escaped quote handling cannot drift.
+    cpp_marker = 'cpp_quote("#include \\"'
+    for line in text.splitlines():
+        start = line.find(cpp_marker)
+        if start < 0:
+            continue
+        start += len(cpp_marker)
+        end = line.find('\\"', start)
+        if end <= start:
+            fail(f"malformed cpp_quote include in {name}: {line}")
+        header = line[start:end]
         candidate = str(pathlib.PurePosixPath(header).with_suffix(".idl"))
         if (include / candidate).is_file():
             visit(candidate)
