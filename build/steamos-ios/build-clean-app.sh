@@ -85,7 +85,7 @@ bash tools/packaging/package-ipa.sh "$APP" "$IPA"
 
 python3 - "$R" "$APP" "$IPA" "$ARTIFACTS/build-info.json" <<'PY'
 from __future__ import annotations
-import hashlib, json, pathlib, subprocess, sys
+import hashlib, json, pathlib, plistlib, subprocess, sys
 
 root = pathlib.Path(sys.argv[1])
 app = pathlib.Path(sys.argv[2])
@@ -115,6 +115,12 @@ def sha256(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 xcode = cmd("xcodebuild", "-version").splitlines()
+with (app / "Info.plist").open("rb") as f:
+    plist = plistlib.load(f)
+executable = plist.get("CFBundleExecutable")
+if not executable or not (app / executable).is_file():
+    raise SystemExit("built app has no valid CFBundleExecutable")
+
 info = {
     "commit": cmd("git", "rev-parse", "HEAD", cwd=root),
     "fex": rev("FEX"),
@@ -127,7 +133,9 @@ info = {
     "sdk": cmd("xcrun", "--sdk", "iphoneos", "--show-sdk-version"),
     "app": {
         "path": str(app),
-        "executable_sha256": sha256(app / "Madeira"),
+        "bundle_identifier": plist.get("CFBundleIdentifier"),
+        "executable": executable,
+        "executable_sha256": sha256(app / executable),
     },
     "ipa": {
         "path": str(ipa),
