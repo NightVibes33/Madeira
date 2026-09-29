@@ -5,6 +5,7 @@
 #include "JITAllocator.h"
 #include "../../runtime/linux/elf/elf64_image.h"
 #include "../../runtime/linux/syscalls/syscall_dispatch.h"
+#include "../../runtime/linux/process/initial_stack.h"
 
 // Xcode defines DEBUG=1 in debug builds which conflicts with FEX's LogMan::DEBUG enum
 #ifdef DEBUG
@@ -658,23 +659,33 @@ int64_t fex_test_execute(void) {
         running.store(false);
         return -1;
     }
-    uint64_t stack_addr = reinterpret_cast<uint64_t>(stack_mem) + GUEST_STACK_SIZE;
+    uint64_t stack_addr = 0;
+    const char *guest_argv[] = {"steamos-ios-l0"};
+    steamos_linux_initial_stack_spec stack_spec{};
+    stack_spec.argv = guest_argv;
+    stack_spec.argc = 1;
+    stack_spec.page_size = JIT_PAGE_SIZE;
+    stack_spec.entry = code_addr;
 
-    // Set up initial stack like the Linux kernel does for a static executable:
-    // RSP → argc (0)
-    //        argv[0] = NULL
-    //        envp[0] = NULL
-    //        AT_NULL (auxv terminator)
-    uint64_t *sp = reinterpret_cast<uint64_t*>(stack_addr);
-    *(--sp) = 0;    // AT_NULL value
-    *(--sp) = 0;    // AT_NULL type
-    *(--sp) = 0;    // envp[0] = NULL
-    *(--sp) = 0;    // argv[0] = NULL
-    *(--sp) = 0;    // argc = 0
-    stack_addr = reinterpret_cast<uint64_t>(sp);
+    const steamos_linux_stack_error stack_error =
+        steamos_linux_build_initial_stack(
+            stack_mem, GUEST_STACK_SIZE,
+            reinterpret_cast<uint64_t>(stack_mem),
+            &stack_spec, &stack_addr);
+    if (stack_error != STEAMOS_LINUX_STACK_OK) {
+        fex_log("STEAMOS_IOS_L0_FAIL initial stack: %s",
+                steamos_linux_stack_error_string(stack_error));
+        for (int i = 0; i < num_mapped; ++i) {
+            ::munmap(mapped_regions[i].addr, mapped_regions[i].size);
+        }
+        ::munmap(stack_mem, GUEST_STACK_SIZE);
+        running.store(false);
+        return -1;
+    }
 
-    fex_log("Stack at 0x%llx (base=%p, size=0x%x)",
-            (unsigned long long)stack_addr, stack_mem, GUEST_STACK_SIZE);
+    fex_log("Linux initial stack at 0x%llx (base=%p, size=0x%x, argc=1, AT_ENTRY=0x%llx)",
+            (unsigned long long)stack_addr, stack_mem, GUEST_STACK_SIZE,
+            (unsigned long long)code_addr);
 
     // Create a thread for execution
     fex_log("Creating FEX thread (RIP=0x%llx, RSP=0x%llx)...",
