@@ -1,0 +1,23 @@
+diff --git a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+--- a/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
++++ b/FEXCore/Source/Utils/ArchHelpers/Arm64.cpp
+@@ -704,16 +704,23 @@ static void IosLogUnimplementedCASPAL(uint32_t Size, uint64_t* GPRs, uint32_t A
+    * data in a dual-mapped pool page" is distinguishable from ordinary private memory. */
++#if defined(_WIN32)
+   MEMORY_BASIC_INFORMATION mbi {};
+   const char* type = "?";
+   if (VirtualQuery(reinterpret_cast<LPCVOID>(GPRs[AddressReg]), &mbi, sizeof(mbi))) {
+     type = mbi.Type == MEM_IMAGE ? "MEM_IMAGE" : mbi.Type == MEM_MAPPED ? "MEM_MAPPED" : "MEM_PRIVATE";
+   }
+   LogMan::Msg::EFmt("[caspal128] MISALIGNED-UNSUPPORTED Size={} addrReg=x{} addr={:#x} misalign={} "
+                     "crosses16B={} | region base={} size={:#x} prot={:#x} type={} state={:#x}",
+                     Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
+                     (GPRs[AddressReg] & 15) ? "yes" : "no", mbi.BaseAddress, mbi.RegionSize,
+                     mbi.Protect, type, mbi.State);
++#else
++  LogMan::Msg::EFmt("[caspal128] MISALIGNED-UNSUPPORTED Size={} addrReg=x{} addr={:#x} misalign={} "
++                    "crosses16B={} | native-host region metadata unavailable",
++                    Size, AddressReg, GPRs[AddressReg], GPRs[AddressReg] & 15,
++                    (GPRs[AddressReg] & 15) ? "yes" : "no");
++#endif
+ }

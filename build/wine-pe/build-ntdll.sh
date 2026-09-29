@@ -13,7 +13,11 @@ B="$R/wine/build-arm64ec"
 if [ ! -f "$B/config.status" ]; then
     mkdir -p "$B" && cd "$B" && ../configure --enable-archs=arm64ec --without-x --disable-tests
 fi
-cd "$B" && make -C dlls/ntdll
+cd "$B"
+# DXMT's ARM64EC side consumes these generated DirectWrite headers. A clean
+# configure + ntdll-only build does not materialize them automatically.
+make include/dwrite.h include/dwrite_3.h
+make -C dlls/ntdll
 SRC="$B/dlls/ntdll/arm64ec-windows/ntdll.dll"; OUT="$R/app/Madeira/arm64ec-windows/ntdll.dll"
 cp "$SRC" "$OUT.tmp"
 "$TC/arm64ec-w64-mingw32-strip" "$OUT.tmp"
