@@ -19,6 +19,13 @@ APP_LIB="$REPO_ROOT/app/Madeira/libwin32u_unix.a"
 
 mkdir -p "$OBJ_DIR"
 
+# win32u reaches Wine's COM/Shell headers through ntuser_private.h. A clean
+# host configure does not generate these WIDL outputs until a dependent target
+# asks for them, but this standalone static-archive build invokes clang
+# directly. Materialize the exact IDL closure first.
+python3 "$REPO_ROOT/tools/runtime-deps/build-wine-idl-headers.py" \
+    "$WINE_SRC" "$WINE_BUILD" objidlbase.idl objidl.idl shobjidl.idl
+
 SUCCEEDED=0
 FAILED=0
 FAILED_FILES=""
