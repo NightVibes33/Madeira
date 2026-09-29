@@ -30,6 +30,11 @@ static void put_u16(unsigned char *p, unsigned short v)
     memcpy(p, &v, sizeof(v));
 }
 
+static void put_u32(unsigned char *p, unsigned int v)
+{
+    memcpy(p, &v, sizeof(v));
+}
+
 static void put_u64(unsigned char *p, unsigned long long v)
 {
     memcpy(p, &v, sizeof(v));
@@ -76,6 +81,38 @@ static void bad_address_overflow(unsigned char *b, size_t n) {
     put_u64(b + 64 + 40, 16);        /* p_memsz: vaddr + memsz overflows */
 }
 
+static void build_dynamic_interp_fixture(unsigned char *b, size_t n)
+{
+    static const char path[] = "/lib64/ld-linux-x86-64.so.2";
+    const size_t ph0 = 64, ph1 = 120, interp = 0x180;
+    memset(b, 0, n);
+    memcpy(b, "\x7f" "ELF", 4);
+    b[4] = 2; b[5] = 1; b[6] = 1;
+    put_u16(b + 16, 3);
+    put_u16(b + 18, 62);
+    put_u32(b + 20, 1);
+    put_u64(b + 24, 0x100);
+    put_u64(b + 32, 64);
+    put_u16(b + 52, 64);
+    put_u16(b + 54, 56);
+    put_u16(b + 56, 2);
+
+    put_u32(b + ph0 + 0, 1);
+    put_u32(b + ph0 + 4, 5);
+    put_u64(b + ph0 + 8, 0);
+    put_u64(b + ph0 + 16, 0);
+    put_u64(b + ph0 + 32, n);
+    put_u64(b + ph0 + 40, n);
+    put_u64(b + ph0 + 48, 0x1000);
+
+    put_u32(b + ph1 + 0, 3);
+    put_u64(b + ph1 + 8, interp);
+    put_u64(b + ph1 + 32, sizeof(path));
+    put_u64(b + ph1 + 40, sizeof(path));
+    put_u64(b + ph1 + 48, 1);
+    memcpy(b + interp, path, sizeof(path));
+}
+
 int main(int argc, char **argv)
 {
     struct steamos_elf64_image image;
@@ -108,6 +145,48 @@ int main(int argc, char **argv)
         fprintf(stderr, "unexpected parsed image\n");
         free(bytes);
         return 1;
+    }
+
+    {
+        uint64_t runtime = 0;
+        err = steamos_elf64_runtime_address(&image, 0x100000000ULL, image.entry, &runtime);
+        if (err != STEAMOS_ELF64_OK || runtime != 0x100000080ULL) {
+            fprintf(stderr, "runtime address mapping failed: err=%s runtime=0x%llx\n",
+                    steamos_elf64_error_string(err), (unsigned long long)runtime);
+            failed = 1;
+        }
+        err = steamos_elf64_runtime_address(&image, 0x100000000ULL, image.load_min - 1, &runtime);
+        if (err != STEAMOS_ELF64_ERR_ADDRESS_NOT_MAPPED) {
+            fprintf(stderr, "runtime address bounds: expected not-mapped, got %s\n",
+                    steamos_elf64_error_string(err));
+            failed = 1;
+        }
+    }
+
+    {
+        unsigned char dynamic[512];
+        struct steamos_elf64_interpreter interp;
+        build_dynamic_interp_fixture(dynamic, sizeof(dynamic));
+        err = steamos_elf64_find_interpreter(dynamic, sizeof(dynamic), &interp);
+        if (err != STEAMOS_ELF64_OK ||
+            strcmp(interp.path, "/lib64/ld-linux-x86-64.so.2") != 0) {
+            fprintf(stderr, "PT_INTERP discovery failed: %s path=%s\n",
+                    steamos_elf64_error_string(err), interp.path);
+            failed = 1;
+        }
+        err = steamos_elf64_parse(dynamic, sizeof(dynamic), 0x4000, &image);
+        if (err != STEAMOS_ELF64_ERR_INTERPRETER_UNSUPPORTED) {
+            fprintf(stderr, "L0 dynamic guard weakened: got %s\n",
+                    steamos_elf64_error_string(err));
+            failed = 1;
+        }
+        dynamic[0x180 + strlen("/lib64/ld-linux-x86-64.so.2")] = 'X';
+        err = steamos_elf64_find_interpreter(dynamic, sizeof(dynamic), &interp);
+        if (err != STEAMOS_ELF64_ERR_INTERPRETER_TERMINATION) {
+            fprintf(stderr, "unterminated PT_INTERP: expected termination error, got %s\n",
+                    steamos_elf64_error_string(err));
+            failed = 1;
+        }
     }
 
     failed |= expect_error(bytes, size, STEAMOS_ELF64_ERR_MAGIC, bad_magic, "bad magic");

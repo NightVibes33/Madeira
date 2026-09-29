@@ -606,11 +606,8 @@ int64_t fex_test_execute(void) {
         return -1;
     }
 
-    const intptr_t load_bias =
-        reinterpret_cast<intptr_t>(elf_base) - static_cast<intptr_t>(elf_image.load_min);
-    fex_log("ELF: mapped at %p, load_bias=0x%llx (original base 0x%llx)",
-            elf_base, (unsigned long long)load_bias,
-            (unsigned long long)elf_image.load_min);
+    fex_log("ELF: mapped at %p (original base 0x%llx)",
+            elf_base, (unsigned long long)elf_image.load_min);
 
     struct MappedRegion { void *addr; size_t size; };
     MappedRegion mapped_regions[1] = {{elf_base, total_map_size}};
@@ -618,8 +615,19 @@ int64_t fex_test_execute(void) {
 
     for (uint16_t i = 0; i < elf_image.load_count; ++i) {
         const steamos_elf64_segment &seg = elf_image.load[i];
-        const uint64_t relative = seg.virtual_address - elf_image.load_min;
-        uint8_t *destination = static_cast<uint8_t *>(elf_base) + relative;
+        uint64_t destination_address = 0;
+        const steamos_elf64_error map_error =
+            steamos_elf64_runtime_address(
+                &elf_image, reinterpret_cast<uint64_t>(elf_base),
+                seg.virtual_address, &destination_address);
+        if (map_error != STEAMOS_ELF64_OK) {
+            fex_log("STEAMOS_IOS_L0_FAIL segment mapping: %s",
+                    steamos_elf64_error_string(map_error));
+            ::munmap(elf_base, total_map_size);
+            running.store(false);
+            return -1;
+        }
+        uint8_t *destination = reinterpret_cast<uint8_t *>(destination_address);
 
         fex_log("ELF: LOAD vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=%c%c%c -> actual %p",
                 (unsigned long long)seg.virtual_address,
@@ -636,8 +644,18 @@ int64_t fex_test_execute(void) {
         }
     }
 
-    const uint64_t code_addr =
-        reinterpret_cast<uint64_t>(elf_base) + (elf_image.entry - elf_image.load_min);
+    uint64_t code_addr = 0;
+    const steamos_elf64_error entry_map_error =
+        steamos_elf64_runtime_address(
+            &elf_image, reinterpret_cast<uint64_t>(elf_base),
+            elf_image.entry, &code_addr);
+    if (entry_map_error != STEAMOS_ELF64_OK) {
+        fex_log("STEAMOS_IOS_L0_FAIL entry mapping: %s",
+                steamos_elf64_error_string(entry_map_error));
+        ::munmap(elf_base, total_map_size);
+        running.store(false);
+        return -1;
+    }
     fex_log("ELF loaded: entry point = 0x%llx (guest 0x%llx), %d mapping",
             (unsigned long long)code_addr,
             (unsigned long long)elf_image.entry,
@@ -669,9 +687,18 @@ int64_t fex_test_execute(void) {
     stack_spec.phent = elf_image.phent;
     stack_spec.phnum = elf_image.phnum;
     if (elf_image.phdr_virtual_address) {
-        stack_spec.phdr =
-            reinterpret_cast<uint64_t>(elf_base) +
-            (elf_image.phdr_virtual_address - elf_image.load_min);
+        const steamos_elf64_error phdr_map_error =
+            steamos_elf64_runtime_address(
+                &elf_image, reinterpret_cast<uint64_t>(elf_base),
+                elf_image.phdr_virtual_address, &stack_spec.phdr);
+        if (phdr_map_error != STEAMOS_ELF64_OK) {
+            fex_log("STEAMOS_IOS_L0_FAIL PHDR mapping: %s",
+                    steamos_elf64_error_string(phdr_map_error));
+            ::munmap(elf_base, total_map_size);
+            ::munmap(stack_mem, GUEST_STACK_SIZE);
+            running.store(false);
+            return -1;
+        }
     }
 
     const steamos_linux_stack_error stack_error =

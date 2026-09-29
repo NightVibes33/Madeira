@@ -21,6 +21,12 @@ enum steamos_elf64_error {
     STEAMOS_ELF64_ERR_PHENTSIZE,
     STEAMOS_ELF64_ERR_PHDR_BOUNDS,
     STEAMOS_ELF64_ERR_INTERPRETER_UNSUPPORTED,
+    STEAMOS_ELF64_ERR_NO_INTERPRETER,
+    STEAMOS_ELF64_ERR_MULTIPLE_INTERPRETERS,
+    STEAMOS_ELF64_ERR_INTERPRETER_BOUNDS,
+    STEAMOS_ELF64_ERR_INTERPRETER_TERMINATION,
+    STEAMOS_ELF64_ERR_INTERPRETER_TOO_LONG,
+    STEAMOS_ELF64_ERR_ADDRESS_NOT_MAPPED,
     STEAMOS_ELF64_ERR_SEGMENT_BOUNDS,
     STEAMOS_ELF64_ERR_SEGMENT_SIZE,
     STEAMOS_ELF64_ERR_ADDRESS_OVERFLOW,
@@ -31,6 +37,7 @@ enum steamos_elf64_error {
 
 enum {
     STEAMOS_ELF64_MAX_LOAD_SEGMENTS = 32,
+    STEAMOS_ELF64_INTERPRETER_MAX = 511,
     STEAMOS_ELF64_PF_X = 1,
     STEAMOS_ELF64_PF_W = 2,
     STEAMOS_ELF64_PF_R = 4
@@ -43,6 +50,11 @@ struct steamos_elf64_segment {
     uint64_t memory_size;
     uint64_t alignment;
     uint32_t flags;
+};
+
+struct steamos_elf64_interpreter {
+    char path[STEAMOS_ELF64_INTERPRETER_MAX + 1];
+    size_t length;
 };
 
 struct steamos_elf64_image {
@@ -62,6 +74,17 @@ enum steamos_elf64_error steamos_elf64_parse(
     size_t size,
     uint64_t host_page_size,
     struct steamos_elf64_image *out_image);
+
+enum steamos_elf64_error steamos_elf64_find_interpreter(
+    const void *bytes,
+    size_t size,
+    struct steamos_elf64_interpreter *out_interpreter);
+
+enum steamos_elf64_error steamos_elf64_runtime_address(
+    const struct steamos_elf64_image *image,
+    uint64_t mapped_base,
+    uint64_t virtual_address,
+    uint64_t *out_runtime_address);
 
 const char *steamos_elf64_error_string(enum steamos_elf64_error error);
 
