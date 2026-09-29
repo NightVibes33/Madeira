@@ -43,6 +43,12 @@ while IFS= read -r -d '' a; do
   7zz x -y "$a" "-o$dest" >/dev/null 2>&1 || true
 done < <(find "$TREE/exe" -type f -path '*/.rsrc/*/CABINET/*' -print0)
 echo "VCRUNTIME_CAB_RESOURCES count=$cab_resource_count"
+if [ "$cab_resource_count" -eq 0 ]; then
+  echo "=== VC_redist 7-Zip listing (diagnostic) ===" >&2
+  7zz l "$EXE" 2>&1 | sed -n '1,260p' >&2 || true
+  echo "=== first extracted files ===" >&2
+  find "$TREE/exe" -type f -print | sed -n '1,260p' >&2 || true
+fi
 
 # Current Microsoft Burn packages expose one or more CAB/MSI payloads. Extract
 # every archive recursively into separate directories, then select only
