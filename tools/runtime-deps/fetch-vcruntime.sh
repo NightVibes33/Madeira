@@ -32,6 +32,18 @@ echo "VCRUNTIME_INSTALLER_PIN_OK version=$VERSION sha256=$SHA256"
 mkdir -p "$TREE/exe"
 7zz x -y "$EXE" "-o$TREE/exe" >/dev/null
 
+# 7-Zip exposes Burn's embedded cabinets as PE resources. Newer installers do
+# not consistently preserve a .cab suffix there, so extract every resource
+# beneath a CABINET directory regardless of its filename.
+cab_resource_count=0
+while IFS= read -r -d '' a; do
+  cab_resource_count=$((cab_resource_count + 1))
+  dest="$TREE/cab-resource-$cab_resource_count"
+  mkdir -p "$dest"
+  7zz x -y "$a" "-o$dest" >/dev/null 2>&1 || true
+done < <(find "$TREE/exe" -type f -path '*/.rsrc/*/CABINET/*' -print0)
+echo "VCRUNTIME_CAB_RESOURCES count=$cab_resource_count"
+
 # Current Microsoft Burn packages expose one or more CAB/MSI payloads. Extract
 # every archive recursively into separate directories, then select only
 # unmodified AMD64 PE DLLs by exact basename. Wrong-arch ARM64 payloads in the
