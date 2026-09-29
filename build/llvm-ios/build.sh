@@ -69,15 +69,84 @@ if [[ ! -f "$IOS/CMakeCache.txt" ]]; then
         -DLLVM_LINK_LLVM_DYLIB=OFF
 fi
 
-echo "=== Building LLVM iOS static libraries only ==="
-cmake --build "$IOS" --target llvm-libraries -j "$JOBS"
+# DXMT airconv's meson.build records the exact llvm-config --libs
+# bitwriter,passes closure it links. Build that frozen component set only;
+# the generic llvm-libraries umbrella also compiled unrelated JIT/XRay/tool
+# libraries and made every clean DXMT iteration substantially slower.
+llvm_targets=(
+    LLVMPasses
+    LLVMTarget
+    LLVMObjCARCOpts
+    LLVMCoroutines
+    LLVMipo
+    LLVMInstrumentation
+    LLVMVectorize
+    LLVMLinker
+    LLVMIRReader
+    LLVMAsmParser
+    LLVMFrontendOpenMP
+    LLVMScalarOpts
+    LLVMInstCombine
+    LLVMAggressiveInstCombine
+    LLVMTransformUtils
+    LLVMBitWriter
+    LLVMAnalysis
+    LLVMProfileData
+    LLVMSymbolize
+    LLVMDebugInfoPDB
+    LLVMDebugInfoMSF
+    LLVMDebugInfoDWARF
+    LLVMObject
+    LLVMTextAPI
+    LLVMMCParser
+    LLVMMC
+    LLVMDebugInfoCodeView
+    LLVMBitReader
+    LLVMCore
+    LLVMRemarks
+    LLVMBitstreamReader
+    LLVMBinaryFormat
+    LLVMSupport
+    LLVMDemangle
+)
+echo "=== Building LLVM iOS archives required by DXMT airconv ==="
+cmake --build "$IOS" --target "${llvm_targets[@]}" -j "$JOBS"
 
 required=(
-    libLLVMCore.a
+    libLLVMPasses.a
+    libLLVMTarget.a
+    libLLVMObjCARCOpts.a
+    libLLVMCoroutines.a
+    libLLVMipo.a
+    libLLVMInstrumentation.a
+    libLLVMVectorize.a
+    libLLVMLinker.a
     libLLVMIRReader.a
-    libLLVMBitReader.a
+    libLLVMAsmParser.a
+    libLLVMFrontendOpenMP.a
+    libLLVMScalarOpts.a
+    libLLVMInstCombine.a
+    libLLVMAggressiveInstCombine.a
+    libLLVMTransformUtils.a
     libLLVMBitWriter.a
+    libLLVMAnalysis.a
+    libLLVMProfileData.a
+    libLLVMSymbolize.a
+    libLLVMDebugInfoPDB.a
+    libLLVMDebugInfoMSF.a
+    libLLVMDebugInfoDWARF.a
+    libLLVMObject.a
+    libLLVMTextAPI.a
+    libLLVMMCParser.a
+    libLLVMMC.a
+    libLLVMDebugInfoCodeView.a
+    libLLVMBitReader.a
+    libLLVMCore.a
+    libLLVMRemarks.a
+    libLLVMBitstreamReader.a
+    libLLVMBinaryFormat.a
     libLLVMSupport.a
+    libLLVMDemangle.a
 )
 for lib in "${required[@]}"; do
     [[ -s "$IOS/lib/$lib" ]] || {
@@ -88,8 +157,8 @@ for lib in "${required[@]}"; do
 done
 
 count="$(find "$IOS/lib" -maxdepth 1 -name '*.a' -type f | wc -l | tr -d ' ')"
-[[ "$count" -ge 5 ]] || {
-    echo "error: expected LLVM static archive set, found only $count" >&2
+[[ "$count" -ge ${#required[@]} ]] || {
+    echo "error: expected DXMT LLVM archive set, found only $count" >&2
     exit 1
 }
 echo "LLVM_IOS_CLEAN_BUILD_OK archives=$count commit=$(git -C "$ROOT/toolchains/llvm-project" rev-parse HEAD)"
