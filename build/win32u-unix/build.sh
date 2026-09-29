@@ -59,6 +59,9 @@ compile_one() {
         SUCCEEDED=$((SUCCEEDED + 1))
     else
         echo "FAILED"
+        echo "----- $name compiler diagnostics -----" >&2
+        sed -n '1,220p' "$OBJ_DIR/$name.err" >&2 || true
+        echo "----- end $name diagnostics -----" >&2
         FAILED=$((FAILED + 1))
         FAILED_FILES="$FAILED_FILES $name"
     fi
