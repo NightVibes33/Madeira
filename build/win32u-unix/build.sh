@@ -34,7 +34,8 @@ mkdir -p "$OBJ_DIR"
 # asks for them, but this standalone static-archive build invokes clang
 # directly. Materialize the exact IDL closure first.
 python3 "$REPO_ROOT/tools/runtime-deps/build-wine-idl-headers.py" \
-    "$WINE_SRC" "$WINE_BUILD" objidlbase.idl objidl.idl shobjidl.idl
+    "$WINE_SRC" "$WINE_BUILD" \
+    objidlbase.idl objidl.idl shobjidl.idl exdisp.idl shldisp.idl
 
 SUCCEEDED=0
 FAILED=0
