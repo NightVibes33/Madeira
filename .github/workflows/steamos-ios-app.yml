@@ -2,6 +2,11 @@ name: SteamOS-iOS clean app + IPA
 
 on:
   workflow_dispatch:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/steamos-ios-app.yml"
+      - "build/steamos-ios/TRIGGER_APP_BUILD"
 
 permissions:
   contents: read
@@ -45,6 +50,9 @@ jobs:
           set -euo pipefail
           test -s artifacts/SteamOS-iOS.ipa
           test -s artifacts/SteamOS-iOS.ipa.sha256
+          test -s artifacts/build-info.json
+          test -s artifacts/SHA256SUMS
+          (cd artifacts && shasum -a 256 -c SHA256SUMS)
           unzip -tq artifacts/SteamOS-iOS.ipa
           unzip -Z1 artifacts/SteamOS-iOS.ipa | grep -q '^Payload/[^/]*\.app/Info.plist$'
           echo "STEAMOS_IOS_IPA_GATE_OK"
@@ -56,5 +64,8 @@ jobs:
           path: |
             artifacts/SteamOS-iOS.ipa
             artifacts/SteamOS-iOS.ipa.sha256
+            artifacts/build-info.json
+            artifacts/SHA256SUMS
+            build/steamos-ios-derived/Build/Products/Debug-iphoneos/Madeira.app.dSYM
           if-no-files-found: error
           compression-level: 0
