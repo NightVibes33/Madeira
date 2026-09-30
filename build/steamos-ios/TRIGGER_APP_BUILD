@@ -1,2 +1,2 @@
-trigger=steamios-big-picture-crash-logs-20260930-v3
-purpose=validate-final-silent-startup-big-picture-files-crash-logs
+trigger=steamios-big-picture-crash-logs-20260930-v4
+purpose=final-build-silent-big-picture-files-crash-logs-contract
