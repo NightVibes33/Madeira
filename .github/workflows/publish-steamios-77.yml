@@ -1,0 +1,52 @@
+name: Publish SteamIOS build 77
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/publish-steamios-77.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download green build 77 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Debug-unsigned
+          path: dist
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 36672560934
+
+      - name: Verify artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/SteamIOS.ipa
+          test -s dist/build-info.json
+          test -s dist/SHA256SUMS
+          (
+            cd dist
+            sha256sum -c SHA256SUMS
+          )
+          grep -F '"commit": "34062610874779dfd905980899dd3dc7c6c8db29"' dist/build-info.json
+          echo "STEAMIOS_77_RELEASE_GATE_OK"
+
+      - name: Publish direct IPA release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="steamios-build-77"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag"               --target "34062610874779dfd905980899dd3dc7c6c8db29"               --title "SteamIOS build 77"               --notes "Green unsigned Debug IPA from workflow run 36672560934. Includes the preinstalled Windows Steam client and post-Steam landscape handoff."
+          fi
+          gh release upload "$tag"             dist/SteamIOS.ipa             dist/SteamIOS.ipa.sha256             dist/build-info.json             dist/SHA256SUMS             --clobber
+          echo "STEAMIOS_77_RELEASE_PUBLISHED"
