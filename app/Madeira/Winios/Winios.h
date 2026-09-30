@@ -56,6 +56,10 @@ void winios_set_compositor_frame(double x, double y, double w, double h);
  * real Windows Steam pixels are flowing, even before any DXMT game presents. */
 unsigned long long winios_get_surface_present_count(void);
 
+/* Publish a Wine HWND's current class/title so the product startup gate can
+ * distinguish a real Steam window from explorer's large desktop surface. */
+void winios_window_identity(void *hwnd, const char *class_name, const char *title);
+
 /* S2 trackpad pointer. (x, y) are ABSOLUTE wine-desktop pixels (the
  * Swift trackpad engine owns the cursor position); flags are raw
  * MOUSEEVENTF_* combos; data carries the wheel delta for
