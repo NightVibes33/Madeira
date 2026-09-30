@@ -16,8 +16,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  steam-payload:
+    name: assemble preinstalled Windows Steam client
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read current Valve Steam client manifest
+        id: steam-manifest
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $manifest = Join-Path $env:RUNNER_TEMP "steam_client_win32"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://client-update.akamai.steamstatic.com/steam_client_win32" -OutFile $manifest
+          $sha = (Get-FileHash -Algorithm SHA256 $manifest).Hash.ToLowerInvariant()
+          "sha256=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "STEAMIOS_VALVE_MANIFEST_OK sha256=$sha"
+
+      - name: Restore preinstalled Steam client cache
+        id: steam-client-cache
+        uses: actions/cache@v4
+        with:
+          path: steam-payload-cache
+          key: steamios-full-steam-v2-${{ steps.steam-manifest.outputs.sha256 }}-${{ hashFiles('build/steamos-ios/build-steam-payload.ps1') }}
+
+      - name: Assemble full Steam client on Windows
+        if: steps.steam-client-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          ./build/steamos-ios/build-steam-payload.ps1 `
+            -OutputDir "$env:GITHUB_WORKSPACE\steam-payload-cache" `
+            -ManifestPath "$env:RUNNER_TEMP\steam_client_win32"
+
+      - name: Verify preinstalled Steam payload
+        shell: pwsh
+        run: |
+          $payload = "steam-payload-cache\SteamPayload.tar.gz"
+          $meta = "steam-payload-cache\SteamPayload.json"
+          if (-not (Test-Path $payload)) { throw "SteamPayload.tar.gz missing" }
+          if (-not (Test-Path $meta)) { throw "SteamPayload.json missing" }
+          $entries = (& tar.exe -tzf $payload) -replace '\\','/'
+          foreach ($required in @(
+            "Steam/steam.exe",
+            "Steam/steamclient.dll",
+            "Steam/steamclient64.dll",
+            "Steam/steamui.dll",
+            "Steam/bin/cef/cef.win7x64/steamwebhelper.exe",
+            "Steam/package/steam_client_win32.installed"
+          )) {
+            if ($entries -notcontains $required) { throw "Steam payload missing $required" }
+          }
+          Write-Host "STEAMIOS_FULL_STEAM_ARCHIVE_GATE_OK"
+
+      - name: Upload preinstalled Steam payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-Windows-Steam
+          path: |
+            steam-payload-cache/SteamPayload.tar.gz
+            steam-payload-cache/SteamPayload.json
+          if-no-files-found: error
+          compression-level: 0
+
   clean-app:
     name: clean Debug iPhoneOS app and IPA
+    needs: steam-payload
     runs-on: xcode-27
     timeout-minutes: 360
     env:
@@ -30,6 +96,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Download preinstalled Windows Steam client
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Windows-Steam
+          path: app/Madeira/SteamPrecache
 
       - name: Restore pinned source/toolchain cache
         uses: actions/cache@v4
