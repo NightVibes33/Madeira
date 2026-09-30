@@ -325,12 +325,13 @@ final class MetalBackedView: UIView {
             host.removeFromSuperview()
             w.addSubview(host)
         }
-        host.frame = convert(gameRect(), to: w)
-        // S2 desktop mode: the winios compositor renders the wine virtual
-        // desktop aspect-fit inside THIS placeholder's area, exactly like
-        // the games' Metal layer — never over the whole phone screen.
-        let full = convert(bounds, to: w)
-        winios_set_compositor_frame(full.minX, full.minY, full.width, full.height)
+        let presentation = convert(gameRect(), to: w)
+        host.frame = presentation
+        // Metal, Windows compositor and touch all share this exact safe-area fit.
+        winios_set_compositor_frame(
+            presentation.minX, presentation.minY,
+            presentation.width, presentation.height
+        )
         if !Self.layerRegistered {
             Self.layerRegistered = true
             madeira_display_set_layer(host.metalLayer)
@@ -341,9 +342,12 @@ final class MetalBackedView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         if let w = window {
-            MetalHostView.shared.frame = convert(gameRect(), to: w)
-            let full = convert(bounds, to: w)
-            winios_set_compositor_frame(full.minX, full.minY, full.width, full.height)
+            let presentation = convert(gameRect(), to: w)
+            MetalHostView.shared.frame = presentation
+            winios_set_compositor_frame(
+                presentation.minX, presentation.minY,
+                presentation.width, presentation.height
+            )
         }
     }
 
@@ -1152,6 +1156,8 @@ struct ContentView: View {
                 if productState == .running && !steamSettingsPresented {
                     MetalHostView.shared.alpha = 1
                     MetalHostView.shared.isHidden = false
+                    winios_set_product_visible(1)
+                    TouchControlsHost.setHidden(false)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .steamOSSettingsRequested)) { _ in
@@ -1166,6 +1172,11 @@ struct ContentView: View {
                 // never be visually trapped underneath the game surface.
                 MetalHostView.shared.isHidden = shown
                 TouchControlsHost.setHidden(shown)
+                if productState == .running {
+                    winios_set_product_visible(shown ? 0 : 1)
+                } else if shown {
+                    winios_set_product_visible(0)
+                }
                 if !shown && productState == .running {
                     MetalHostView.shared.isHidden = false
                 }
@@ -1173,9 +1184,8 @@ struct ContentView: View {
             .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
                 guard productState == .launchingSteam else { return }
 
-                // Explorer can create/present a desktop before Steam starts. Do
-                // not use that as the landscape trigger. The launch batch writes
-                // this marker only after Windows successfully spawns steam.exe.
+                // The windowless bootstrap writes this marker only after
+                // CreateProcessW successfully starts the real steam.exe.
                 if !steamProcessObserved {
                     guard FileManager.default.fileExists(atPath: steamLaunchMarkerURL().path) else {
                         return
@@ -1183,28 +1193,21 @@ struct ContentView: View {
                     steamProcessObserved = true
                     presentBaseline = Int(madeira_get_present_count())
                     compositorBaseline = winios_get_surface_present_count()
-                    logStore.log("Steam launch committed; waiting for a verified Steam window surface.",
+                    logStore.log("Steam process launched; waiting for verified Steam pixels.",
                                  level: .success)
                     return
                 }
 
                 let steamPresented = Int(madeira_get_present_count()) > presentBaseline ||
                     winios_get_surface_present_count() > compositorBaseline
-                guard steamPresented else { return }
+                guard steamPresented, SteamIOSOrientation.isLandscape else { return }
 
-                if !steamLandscapeRequested {
-                    steamLandscapeRequested = true
-                    MetalHostView.shared.isHidden = true
-                    logStore.log("Steam surface is live; switching to landscape.", level: .success)
-                    SteamIOSOrientation.requestLandscape(log: logStore)
-                    return
-                }
-
-                guard SteamIOSOrientation.isLandscape else { return }
                 productState = .running
                 MetalBackedView.refreshPresentationGeometry()
+                TouchControlsHost.setHidden(steamSettingsPresented)
                 TouchControlsHost.attach()
                 MetalHostView.shared.isHidden = steamSettingsPresented
+                winios_set_product_visible(steamSettingsPresented ? 0 : 1)
                 UIView.animate(withDuration: 0.20) {
                     MetalHostView.shared.alpha = 1
                 }
@@ -1305,6 +1308,8 @@ struct ContentView: View {
         try? FileManager.default.removeItem(at: steamLaunchMarkerURL())
         MetalHostView.shared.alpha = 0
         MetalHostView.shared.isHidden = false
+        winios_set_product_visible(0)
+        TouchControlsHost.setHidden(true)
 
         if jit_check_debugged() && isDebuggerAttached() && getenv("MADEIRA_DETACHED") == nil {
             launchSteamProductRuntime()
@@ -1344,6 +1349,9 @@ struct ContentView: View {
         let deskH = steamSize.height
         logStore.log("Steam auto-start display target: \(deskW)x\(deskH)")
         productState = .launchingSteam
+        // Rotate while startup is still black; never expose portrait Wine UI.
+        steamLandscapeRequested = true
+        SteamIOSOrientation.requestLandscape(log: logStore)
 
         // The complete Valve Win64 client ships inside prefix-template.tar.gz.
         // Prefix extraction/legacy-prefix repair is filesystem work only; run it
@@ -1369,16 +1377,11 @@ struct ContentView: View {
                     )
                     return
                 }
-                guard self.prepareSteamLaunch() else {
-                    let message = "The bundled Steam runtime could not be prepared."
-                    self.productState = .failed(message)
-                    _ = self.logStore.writeDiagnosticReport(
-                        reason: "Steam launch batch preparation failed",
-                        details: message
-                    )
-                    return
-                }
-                self.configureSteamProductRuntime(batch: "steam-launch.bat", deskW: deskW, deskH: deskH)
+                self.logStore.log(
+                    "Bundled Steam client validated; starting the windowless Steam bootstrap.",
+                    level: .success
+                )
+                self.configureSteamProductRuntime(deskW: deskW, deskH: deskH)
                 self.runWineFullSequence { exitCode in
                     DispatchQueue.main.async {
                         if self.productState != .running {
@@ -2534,8 +2537,8 @@ struct ContentView: View {
             }
             winios_phase("wineserver-up")
 
-            // Step 3: Start Wine
-            Thread.sleep(forTimeInterval: 2.0)
+            // Step 3: Start Wine immediately; socketpair injection does not
+            // need the old blind desktop-era delay.
             winios_phase("wine-start")
             guard self.startWineProcess() else {
                 wineserver_stop()
@@ -2676,7 +2679,7 @@ struct ContentView: View {
     /// Research probes stay opt-in through dedicated diagnostics controls; the
     /// ordinary Steam button must not enable frame dumps, source watches, IR
     /// capture, socket tracing, or optimizer experiments.
-    private func configureSteamProductRuntime(batch: String, deskW: Int, deskH: Int) {
+    private func configureSteamProductRuntime(deskW: Int, deskH: Int) {
         let clear = [
             "MADEIRA_STEAM_APP_PATH", "MADEIRA_STEAM_APP_ID",
             "MADEIRA_SOCK_WIRE", "FEX_O0", "MADEIRA_NO_DFE", "MADEIRA_IR_TOPO",
@@ -2686,55 +2689,18 @@ struct ContentView: View {
         ]
         for name in clear { unsetenv(name) }
 
-        setenv("MADEIRA_EXE", "explorer.exe", 1)
-        setenv("MADEIRA_ARGS",
-               "/desktop=shell,\(deskW)x\(deskH) cmd /c C:\\\(batch)", 1)
+        // Shipping Steam never boots Explorer or cmd.exe. This native-ARM64
+        // Windows GUI bootstrap starts services.exe hidden, launches the real
+        // x64 steam.exe -bigpicture, and waits so wineserver stays alive.
+        unsetenv("MADEIRA_USE_ARM64EC")
+        unsetenv("MADEIRA_ARGS")
+        setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)
         setenv("MADEIRA_DESKTOP", "1", 1)
+        setenv("STEAMOS_IOS_PRODUCT", "1", 1)
         setenv("MADEIRA_SCREEN_W", String(deskW), 1)
         setenv("MADEIRA_SCREEN_H", String(deskH), 1)
         setenv("STEAMOS_IOS_TOUCHSCREEN", "1", 1)
-
-        // This means V8/CEF jitless, NOT FEX jitless. FEX x86/x64 translation
-        // still requires the executable JIT gate and the large StikJIT pool.
         setenv("MADEIRA_JITLESS", "1", 1)
-    }
-
-    /// Locate an installed Steam client and regenerate the stable launch batch.
-    private func prepareSteamLaunch() -> Bool {
-        guard let (winDir, _) = steamInstallLocation() else {
-            logStore.log("Bundled Steam client is not present in the Wine prefix.", level: .error)
-            return false
-        }
-
-        let fm = FileManager.default
-        let prefix = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("wine").path
-
-        let bat = """
-        @echo off\r
-        rem Generated by SteamIOS — rewritten every launch.\r
-        del /f /q "C:\\.steamios-steam-launched" >nul 2>&1\r
-        del /f /q "C:\\.steamios-steam-exit-code" >nul 2>&1\r
-        start "" "C:\\windows\\system32\\services.exe"\r
-        cd /d "\(winDir)"\r
-        rem Keep cmd/explorer attached to Steam. Using START here lets the parent\r
-        rem command exit immediately, which tears down wineserver underneath Steam.\r
-        >"C:\\.steamios-steam-launched" echo Steam launch committed\r
-        "\(winDir)\\steam.exe" -bigpicture -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
-        set "STEAM_EXIT=%ERRORLEVEL%"\r
-        >"C:\\.steamios-steam-exit-code" echo %STEAM_EXIT%\r
-        exit /b %STEAM_EXIT%\r
-        """
-
-        let batPath = "\(prefix)/drive_c/steam-launch.bat"
-        do {
-            try bat.write(toFile: batPath, atomically: true, encoding: .utf8)
-        } catch {
-            logStore.log("Could not write steam-launch.bat: \(error.localizedDescription)", level: .error)
-            return false
-        }
-        logStore.log("Steam found at \(winDir)", level: .success)
-        return true
     }
 
     private func startWineserver() -> Bool {

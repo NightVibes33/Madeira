@@ -56,6 +56,7 @@ python3 -c 'from packaging.version import Version; assert Version("24.2") == Ver
 # 32-bit SteamSetup.exe and any 32-bit Steam/game children.
 bash build/fex-arm64ec/build.sh
 bash build/fex-wow64/build.sh
+bash build/steamios-launcher/build.sh
 
 # Wine host headers are consumed by the unix-side archive build.
 mkdir -p wine/build-macos
@@ -100,6 +101,10 @@ for f in app/Madeira/libwineserver.a app/Madeira/libntdll_unix.a app/Madeira/lib
 done
 
 test "$(find app/Madeira/x86_64-vcruntime -maxdepth 1 -type f -name '*.dll' | wc -l | tr -d ' ')" = "12"
+test -s app/Madeira/aarch64-windows/steamios-launcher.exe || {
+  echo "error: windowless Steam launcher is missing" >&2
+  exit 1
+}
 
 # Windows Steam bootstrap cannot run without a real PE32 farm and both FEX
 # translator DLLs. Key files catch partial builds; the count catches an

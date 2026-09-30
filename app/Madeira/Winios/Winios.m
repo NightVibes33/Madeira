@@ -600,6 +600,7 @@ static CALayer *g_desk_bg;               /* teal desktop-area backdrop */
 static CGFloat g_px_to_pt = 1.0 / 3.0;   /* desktop px → screen pt */
 static CGPoint g_desk_origin;            /* desktop (0,0) in view pt (letterbox offset) */
 static CGRect g_comp_frame;              /* presentation area (window coords), from Swift */
+static BOOL g_product_visible = YES;       /* diagnostics default; shipping Steam hides until verified */
 static unsigned long long g_visible_surface_present_count; /* verified Steam-window GDI presents */
 static NSMutableDictionary<NSNumber *, NSNumber *> *g_window_is_steam;
 
@@ -696,6 +697,18 @@ void winios_set_compositor_frame(double x, double y, double w, double h) {
     });
 }
 
+/* Shipping-product visibility gate: internal Wine windows may exist before
+ * Steam, but they are never user-visible. */
+void winios_set_product_visible(int visible) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        g_product_visible = visible ? YES : NO;
+        if (g_compositor_view) {
+            g_compositor_view.hidden = !g_product_visible;
+            if (g_product_visible) winios_layout_compositor();
+        }
+    });
+}
+
 /* main thread only */
 static void winios_ensure_compositor(void) {
     if (g_compositor_view) return;
@@ -715,6 +728,7 @@ static void winios_ensure_compositor(void) {
     g_compositor_view = [[UIView alloc] initWithFrame:win.bounds];
     g_compositor_view.userInteractionEnabled = NO;  /* touches fall through */
     g_compositor_view.clipsToBounds = YES;
+    g_compositor_view.hidden = !g_product_visible;
     /* letterbox area: near-black; desktop area: classic teal (until
      * explorer's own background paint works) */
     g_compositor_view.backgroundColor = [UIColor colorWithWhite:0.08 alpha:1.0];

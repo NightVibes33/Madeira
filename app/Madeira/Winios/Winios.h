@@ -51,6 +51,9 @@ void winios_post_key(int vk, int down);
  * dispatch inside. */
 void winios_set_compositor_frame(double x, double y, double w, double h);
 
+/* Hide internal Wine windows until a verified Steam-owned surface is ready. */
+void winios_set_product_visible(int visible);
+
 /* Number of successful large desktop/CEF surface presents. Used by the
  * shipping Swift root to dismiss its native Steam-loading state as soon as
  * real Windows Steam pixels are flowing, even before any DXMT game presents. */

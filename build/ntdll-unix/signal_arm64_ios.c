@@ -2502,6 +2502,45 @@ static void *ios_mach_exception_thread( void *arg )
                 }
             }
 
+            /* ml1137: malformed x18/TSD trampoline recovery.
+             * Steam x64 exposed: mrs xzr,TPIDRRO; and xzr,xzr,#~7;
+             * ldr xzr,[sp,#TSD_OFFSET]. Register 31 is XZR in the first two
+             * instructions but SP as the LDR base, so early SP==0 faults at
+             * exactly TSD_OFFSET. The load is discarded; skip only this exact
+             * generated shape and resume at its branch-back instruction. */
+            if (!handled && req->exception == EXC_BAD_ACCESS &&
+                thread_teb && ios_teb_tls_slot_offset &&
+                fault_addr == (uintptr_t)ios_teb_tls_slot_offset)
+            {
+                extern void *ios_jit_rx_base_global;
+                extern size_t ios_jit_pool_size_global;
+                uint64_t fault_pc = (uint64_t)__darwin_arm_thread_state64_get_pc(state);
+                uintptr_t rx = (uintptr_t)ios_jit_rx_base_global;
+                size_t sz = ios_jit_pool_size_global;
+                uint32_t cur = 0, prev1 = 0, prev2 = 0;
+
+                if (rx && sz && fault_pc >= rx + 8 && fault_pc < rx + sz &&
+                    ios_fault_read_insn(fault_pc, &cur) &&
+                    ios_fault_read_insn(fault_pc - 4, &prev1) &&
+                    ios_fault_read_insn(fault_pc - 8, &prev2) &&
+                    (cur & 0xffc00000u) == 0xf9400000u &&
+                    (cur & 0x1fu) == 31u && ((cur >> 5) & 0x1fu) == 31u &&
+                    prev1 == 0x927df3ffu && prev2 == 0xd53bd07fu &&
+                    ((((cur >> 10) & 0xfffu) << 3) == ios_teb_tls_slot_offset))
+                {
+                    static volatile int recovered_xzr_trampolines;
+                    int n = __sync_add_and_fetch(&recovered_xzr_trampolines, 1);
+                    __darwin_arm_thread_state64_set_pc_fptr(state, (void *)(uintptr_t)(fault_pc + 4));
+                    handled = 1;
+                    if (n <= 16)
+                        dprintf(STDERR_FILENO,
+                            "[x18-xzr-recover] ml1137 #%d pc=0x%llx offset=0x%x teb=%p "
+                            "skipped malformed discarded TSD load; resuming branch-back\n",
+                            n, (unsigned long long)fault_pc, ios_teb_tls_slot_offset,
+                            (void *)thread_teb);
+                }
+            }
+
             /* 3.5. FEX unaligned LDAR/LDAPR/STLR backpatch.
              *
              * x86 has TSO ordering. FEX's MemoryOps lowers x86 TSO loads/stores
