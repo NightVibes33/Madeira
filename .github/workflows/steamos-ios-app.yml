@@ -20,10 +20,26 @@ jobs:
     name: clean Debug iPhoneOS app and IPA
     runs-on: xcode-27
     timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Restore pinned source/toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal.tar.xz
+            toolchains/llvm-project
+            research/freetype
+          key: steamios-sources-xcode27-v2-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-freetype.sh', 'tools/runtime-deps/fetch-llvm-project.sh') }}
 
       - name: Install host build prerequisites
         run: brew install bison ccache ninja meson sevenzip
@@ -54,6 +70,34 @@ jobs:
           bash tools/runtime-deps/fetch-llvm-project.sh
           bash tools/runtime-deps/fetch-vcruntime.sh
           echo "STEAMOS_IOS_BOOTSTRAP_OK"
+
+      - name: Restore compiled runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            FEX/build-arm64ec
+            FEX/build-wow64
+            wine/build-macos
+            wine/build-i386
+            toolchains/gnutls-ios
+            build/freetype-ios/build
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: steamios-runtime-xcode27-v4-${{ hashFiles('tools/verify-madeira-pins.py', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/**/*.sh', 'build/wine-pe/**/*.sh', 'build/ntdll-unix/**/*.sh', 'build/win32u-unix/**/*.sh', 'build/llvm-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh') }}
+
+      - name: Configure persistent compiler cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache --set-config=compiler_check="$CCACHE_COMPILERCHECK"
+          ccache --set-config=base_dir="$CCACHE_BASEDIR"
+          ccache --set-config=hash_dir=false
+          ccache --zero-stats
+          ccache --show-config
+          echo "STEAMIOS_CCACHE_READY dir=$CCACHE_DIR"
 
       - name: Build iOS native dependencies
         shell: bash
@@ -127,6 +171,14 @@ jobs:
           bash build/dxmt-ios/build.sh
           bash build/stage-licenses.sh
           echo "STEAMOS_IOS_DXMT_IOS_OK"
+
+      - name: Report persistent cache stats
+        if: always()
+        shell: bash
+        run: |
+          ccache --show-stats || true
+          du -sh "$CCACHE_DIR" 2>/dev/null || true
+          echo "STEAMIOS_CACHE_STATS_REPORTED"
 
       - name: Link app and package unsigned Debug IPA
         shell: bash
