@@ -14,7 +14,7 @@ cd "$R"
 echo "=== SteamIOS clean app build ==="
 python3 tools/verify-madeira-pins.py
 
-for tool in cmake ninja meson python3 xcodebuild; do
+for tool in cmake ninja meson python3 xcodebuild curl; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "error: required clean-build host tool missing: $tool" >&2
     exit 1
@@ -129,6 +129,37 @@ i386_count="$(find app/Madeira/i386-windows -maxdepth 1 -type f ! -name '.gitkee
 }
 echo "STEAMOS_IOS_WOW64_PAYLOAD_OK files=$i386_count"
 
+# Precache Valve's official Windows Steam installer into the IPA. Runtime uses
+# this bundled copy first and only contacts the CDN if the precache is missing
+# or invalid. The installer is refreshed on every clean artifact build.
+STEAM_INSTALLER_URL="https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe"
+STEAM_PRECACHE_DIR="$R/app/Madeira/SteamPrecache"
+STEAM_PRECACHE="$STEAM_PRECACHE_DIR/SteamSetup.exe"
+STEAM_PRECACHE_TMP="$STEAM_PRECACHE.tmp"
+mkdir -p "$STEAM_PRECACHE_DIR"
+rm -f "$STEAM_PRECACHE_TMP"
+curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 \
+  --output "$STEAM_PRECACHE_TMP" "$STEAM_INSTALLER_URL"
+python3 - "$STEAM_PRECACHE_TMP" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+d = p.read_bytes()
+if len(d) < 1_000_000 or d[:2] != b"MZ":
+    raise SystemExit(f"error: SteamSetup.exe precache is not a valid PE payload ({len(d)} bytes)")
+print(f"STEAMIOS_STEAM_PRECACHE_VALID bytes={len(d)}")
+PY
+mv "$STEAM_PRECACHE_TMP" "$STEAM_PRECACHE"
+steam_precache_sha="$(shasum -a 256 "$STEAM_PRECACHE" | awk '{print $1}')"
+steam_precache_size="$(stat -f%z "$STEAM_PRECACHE")"
+cat > "$STEAM_PRECACHE_DIR/manifest.json" <<EOF
+{
+  "source": "$STEAM_INSTALLER_URL",
+  "sha256": "$steam_precache_sha",
+  "size": $steam_precache_size
+}
+EOF
+echo "STEAMIOS_STEAM_PRECACHE_OK sha256=$steam_precache_sha bytes=$steam_precache_size"
+
 # Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
 # Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
 ICON_SOURCE="$R/build/steamos-ios/assets/SteamIOS-AppIcon-source.jpeg"
@@ -162,6 +193,21 @@ bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.p
   echo "error: packaged bundle id is '$bundle_id' (expected com.nightvibes33.steamios)" >&2
   exit 1
 }
+test -s "$APP/SteamPrecache/SteamSetup.exe" || {
+  echo "error: SteamSetup.exe precache missing from packaged app" >&2
+  exit 1
+}
+test -s "$APP/SteamPrecache/manifest.json" || {
+  echo "error: Steam precache manifest missing from packaged app" >&2
+  exit 1
+}
+python3 - "$APP/SteamPrecache/SteamSetup.exe" <<'PY'
+import pathlib, sys
+d = pathlib.Path(sys.argv[1]).read_bytes()
+if len(d) < 1_000_000 or d[:2] != b"MZ":
+    raise SystemExit("error: packaged SteamSetup.exe precache is invalid")
+print(f"STEAMIOS_PACKAGED_STEAM_PRECACHE_OK bytes={len(d)}")
+PY
 test -s "$APP/Assets.car" || {
   echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
   exit 1
