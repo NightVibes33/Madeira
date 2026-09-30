@@ -138,8 +138,13 @@ jobs:
           grep -F 'madeira_extract_prefix_subtree_tgz' app/Madeira/WineProcessBridge.m
           grep -F '.steamios-steam-launched' app/Madeira/ContentView.swift
           grep -F 'steamProcessObserved' app/Madeira/ContentView.swift
-          grep -F 'steam.exe spawned; waiting for a post-Steam surface.' app/Madeira/ContentView.swift
+          grep -F 'Steam launch committed; waiting for a verified Steam window surface.' app/Madeira/ContentView.swift
           grep -F 'Steam surface is live; switching to landscape.' app/Madeira/ContentView.swift
+          grep -F 'g_wineserver_should_stop = 0;' app/Madeira/WineServerBridge.m
+          grep -F 'winios_window_identity' build/win32u-unix/driver_ios.c
+          grep -F 'winios_is_steam_window(hwnd)' app/Madeira/Winios/Winios.m
+          grep -F '"\(winDir)\\steam.exe" -no-cef-sandbox' app/Madeira/ContentView.swift
+          ! grep -F 'start "" "\(winDir)\\steam.exe"' app/Madeira/ContentView.swift
           grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
           ! grep -F 'SteamSetup.exe /S' app/Madeira/ContentView.swift
           ! grep -F 'Installing Steam' app/Madeira/ContentView.swift
