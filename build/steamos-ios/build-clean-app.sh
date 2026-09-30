@@ -222,7 +222,10 @@ for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Progr
     exit 1
   }
 done
-grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe
+grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' "$PREFIX_LIST" || {
+  echo "error: rebuilt prefix missing steamwebhelper.exe" >&2
+  exit 1
+}
 steam_tree_bytes="$(du -sk "$STEAM_DEST" | awk '{print $1 * 1024}')"
 echo "STEAMIOS_PREFIX_FULL_STEAM_OK bytes=$steam_tree_bytes archive=$(stat -f%z "$PREFIX_TEMPLATE")"
 
@@ -271,7 +274,11 @@ for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Progr
     exit 1
   }
 done
-grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exeecho "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
+grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' "$PACKAGED_PREFIX_LIST" || {
+  echo "error: packaged full Steam client missing steamwebhelper.exe" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
 
 test -s "$APP/Assets.car" || {
   echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
