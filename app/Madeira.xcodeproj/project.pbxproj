@@ -52,7 +52,8 @@
 		A1000244 /* Winios/WiniosGamepad.c in Sources */ = {isa = PBXBuildFile; fileRef = A2000244 /* Winios/WiniosGamepad.c */; };
 		A1000245 /* TouchGamepad.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000245 /* TouchGamepad.swift */; };
 		A1000250 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000250 /* Assets.xcassets */; };
-		A1000251 /* madeira-jit.js in Resources */ = {isa = PBXBuildFile; fileRef = A2000251 /* madeira-jit.js */; };\n\t\tA1000252 /* SteamPrecache in Resources */ = {isa = PBXBuildFile; fileRef = A2000252 /* SteamPrecache */; };
+		A1000251 /* madeira-jit.js in Resources */ = {isa = PBXBuildFile; fileRef = A2000251 /* madeira-jit.js */; };
+		A1000252 /* SteamPrecache in Resources */ = {isa = PBXBuildFile; fileRef = A2000252 /* SteamPrecache */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -111,7 +112,8 @@
 		A2000244 /* Winios/WiniosGamepad.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "Winios/WiniosGamepad.c"; sourceTree = "<group>"; };
 		A2000245 /* TouchGamepad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchGamepad.swift; sourceTree = "<group>"; };
 		A2000250 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A2000251 /* madeira-jit.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "madeira-jit.js"; sourceTree = "<group>"; };\n\t\tA2000252 /* SteamPrecache */ = {isa = PBXFileReference; lastKnownFileType = folder; path = SteamPrecache; sourceTree = "<group>"; };
+		A2000251 /* madeira-jit.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "madeira-jit.js"; sourceTree = "<group>"; };
+		A2000252 /* SteamPrecache */ = {isa = PBXFileReference; lastKnownFileType = folder; path = SteamPrecache; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -192,6 +194,7 @@
 				A2000008 /* Info.plist */,
 				A2000250 /* Assets.xcassets */,
 				A2000251 /* madeira-jit.js */,
+				A2000252 /* SteamPrecache */,
 			);
 			path = Madeira;
 			sourceTree = "<group>";
@@ -297,6 +300,7 @@
 				A1000094 /* cacert.pem in Resources */,
 				A1000250 /* Assets.xcassets in Resources */,
 				A1000251 /* madeira-jit.js in Resources */,
+				A1000252 /* SteamPrecache in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
