@@ -143,7 +143,7 @@ jobs:
           grep -F 'g_wineserver_should_stop = 0;' app/Madeira/WineServerBridge.m
           grep -F 'winios_window_identity' build/win32u-unix/driver_ios.c
           grep -F 'winios_is_steam_window(hwnd)' app/Madeira/Winios/Winios.m
-          grep -F '"\(winDir)\\steam.exe" -no-cef-sandbox' app/Madeira/ContentView.swift
+          grep -F '"\(winDir)\\steam.exe" -bigpicture -no-cef-sandbox' app/Madeira/ContentView.swift
           ! grep -F 'start "" "\(winDir)\\steam.exe"' app/Madeira/ContentView.swift
           grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
           ! grep -F 'SteamSetup.exe /S' app/Madeira/ContentView.swift
