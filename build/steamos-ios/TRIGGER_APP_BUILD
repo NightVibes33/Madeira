@@ -1,2 +1,2 @@
-trigger=steamios-bundle-icon-jit-safe-placement-20260929
-purpose=clean-ipa-after-bundle-id-icon-current-stikdebug-and-fixed-rx-pool
+trigger=steamios-sidestore-precache-20260929
+purpose=precache-official-steam-installer-and-verify-sidestore-identity
