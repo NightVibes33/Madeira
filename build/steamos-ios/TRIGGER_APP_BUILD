@@ -1,2 +1,2 @@
-trigger=steamios-green-foundation-final-package-20260929
-purpose=clean-ipa-after-writable-prefix-list-fix-with-cached-i386-farm
+trigger=steamios-retry-safe-attached-steam-launch-20260930
+purpose=fix-first-launch-parent-exit-retry-crash-and-steam-only-landscape
