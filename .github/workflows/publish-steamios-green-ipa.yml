@@ -1,0 +1,51 @@
+name: Publish green SteamIOS IPA
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/publish-steamios-green-ipa.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download exact green IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Debug-unsigned
+          path: release-staging
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: NightVibes33/Madeira
+          run-id: 36716959380
+
+      - name: Locate release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-staging -maxdepth 3 -type f -print
+          IPA="$(find release-staging -type f -name 'SteamIOS.ipa' -print -quit)"
+          SHA="$(find release-staging -type f -name 'SteamIOS.ipa.sha256' -print -quit)"
+          INFO="$(find release-staging -type f -name 'build-info.json' -print -quit)"
+          SUMS="$(find release-staging -type f -name 'SHA256SUMS' -print -quit)"
+          test -n "$IPA" && test -s "$IPA"
+          mkdir -p publish
+          cp "$IPA" publish/SteamIOS.ipa
+          [ -n "$SHA" ] && cp "$SHA" publish/SteamIOS.ipa.sha256 || true
+          [ -n "$INFO" ] && cp "$INFO" publish/build-info.json || true
+          [ -n "$SUMS" ] && cp "$SUMS" publish/SHA256SUMS || true
+          sha256sum publish/SteamIOS.ipa
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="steamios-green-eee6d21"
+          gh release delete "$TAG" --repo NightVibes33/Madeira --yes >/dev/null 2>&1 || true
+          gh release create "$TAG" publish/*             --repo NightVibes33/Madeira             --target eee6d217bb03516ddadb3ddc02693ea2a4b5b5d0             --title "SteamIOS green build eee6d21"             --notes "Green SteamIOS build from Actions run 36716959380. Silent startup, Steam Big Picture launch, and Files-visible crash diagnostics."
