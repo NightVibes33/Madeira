@@ -130,16 +130,18 @@ i386_count="$(find app/Madeira/i386-windows -maxdepth 1 -type f ! -name '.gitkee
 echo "STEAMOS_IOS_WOW64_PAYLOAD_OK files=$i386_count"
 
 # Precache Valve's official Windows Steam installer into the IPA. Runtime uses
-# this bundled copy first and only contacts the CDN if the precache is missing
-# or invalid. The installer is refreshed on every clean artifact build.
+# the prefix-template copy first, the loose bundled copy for migrations, and
+# Valve's CDN only as a last-resort runtime fallback.
 STEAM_INSTALLER_URL="https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe"
 STEAM_PRECACHE_DIR="$R/app/Madeira/SteamPrecache"
 STEAM_PRECACHE="$STEAM_PRECACHE_DIR/SteamSetup.exe"
 STEAM_PRECACHE_TMP="$STEAM_PRECACHE.tmp"
 mkdir -p "$STEAM_PRECACHE_DIR"
 rm -f "$STEAM_PRECACHE_TMP"
+
 curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 \
   --output "$STEAM_PRECACHE_TMP" "$STEAM_INSTALLER_URL"
+
 python3 - "$STEAM_PRECACHE_TMP" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
@@ -148,9 +150,11 @@ if len(d) < 1_000_000 or d[:2] != b"MZ":
     raise SystemExit(f"error: SteamSetup.exe precache is not a valid PE payload ({len(d)} bytes)")
 print(f"STEAMIOS_STEAM_PRECACHE_VALID bytes={len(d)}")
 PY
+
 mv "$STEAM_PRECACHE_TMP" "$STEAM_PRECACHE"
 steam_precache_sha="$(shasum -a 256 "$STEAM_PRECACHE" | awk '{print $1}')"
 steam_precache_size="$(stat -f%z "$STEAM_PRECACHE")"
+
 cat > "$STEAM_PRECACHE_DIR/manifest.json" <<EOF
 {
   "source": "$STEAM_INSTALLER_URL",
@@ -158,22 +162,23 @@ cat > "$STEAM_PRECACHE_DIR/manifest.json" <<EOF
   "size": $steam_precache_size
 }
 EOF
+
 echo "STEAMIOS_STEAM_PRECACHE_OK sha256=$steam_precache_sha bytes=$steam_precache_size"
 
-
-# Also inject SteamSetup.exe into prefix-template.tar.gz itself. A brand-new
-# installation therefore seeds C:\SteamSetup.exe in the same extraction that
-# creates drive_c; there is no copy/download race before Wine starts.
+# Inject SteamSetup.exe into prefix-template.tar.gz itself. A new install gets
+# C:\SteamSetup.exe during the normal prefix extraction, before Wine starts.
 PREFIX_TEMPLATE="$R/app/Madeira/prefix-template.tar.gz"
 PREFIX_WORK="$(mktemp -d)"
 PREFIX_NEW="$R/app/Madeira/prefix-template.tar.gz.precache"
 trap 'rm -rf "$PREFIX_WORK" "$PREFIX_NEW" "$STEAM_PRECACHE_TMP"' EXIT
+
 tar -xzf "$PREFIX_TEMPLATE" -C "$PREFIX_WORK"
 DRIVE_C="$(find "$PREFIX_WORK" -type d -name drive_c -print -quit)"
-test -n "$DRIVE_C" -a -d "$DRIVE_C" || {
+if [ -z "$DRIVE_C" ] || [ ! -d "$DRIVE_C" ]; then
   echo "error: prefix-template.tar.gz has no drive_c" >&2
   exit 1
-}
+fi
+
 cp "$STEAM_PRECACHE" "$DRIVE_C/SteamSetup.exe"
 cat > "$(dirname "$DRIVE_C")/.steamios-precache.json" <<EOF
 {
@@ -181,13 +186,21 @@ cat > "$(dirname "$DRIVE_C")/.steamios-precache.json" <<EOF
   "steam_setup_size": $steam_precache_size
 }
 EOF
+
 if [ -d "$PREFIX_WORK/prefix" ]; then
   tar -czf "$PREFIX_NEW" -C "$PREFIX_WORK" prefix
 else
   tar -czf "$PREFIX_NEW" -C "$PREFIX_WORK" .
 fi
 mv "$PREFIX_NEW" "$PREFIX_TEMPLATE"
-tar -tzf "$PREFIX_TEMPLATE" | grep -Eq '(^|/)drive_c/SteamSetup\.exe
+
+if ! tar -tzf "$PREFIX_TEMPLATE" | grep -Eq '(^|/)drive_c/SteamSetup\.exe$'; then
+  echo "error: SteamSetup.exe missing from rebuilt prefix template" >&2
+  exit 1
+fi
+
+echo "STEAMIOS_PREFIX_TEMPLATE_PRECACHE_OK sha256=$steam_precache_sha"
+
 # Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
 # Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
 ICON_SOURCE="$R/build/steamos-ios/assets/SteamIOS-AppIcon-source.jpeg"
@@ -233,7 +246,21 @@ test -s "$APP/prefix-template.tar.gz" || {
   echo "error: packaged prefix template missing" >&2
   exit 1
 }
-tar -tzf "$APP/prefix-template.tar.gz" | grep -Eq '(^|/)drive_c/SteamSetup\.exetest -s "$APP/Assets.car" || {
+if ! tar -tzf "$APP/prefix-template.tar.gz" | grep -Eq '(^|/)drive_c/SteamSetup\.exe$'; then
+  echo "error: packaged prefix template does not contain SteamSetup.exe" >&2
+  exit 1
+fi
+echo "STEAMIOS_PACKAGED_PREFIX_PRECACHE_OK"
+
+python3 - "$APP/SteamPrecache/SteamSetup.exe" <<'PY'
+import pathlib, sys
+d = pathlib.Path(sys.argv[1]).read_bytes()
+if len(d) < 1_000_000 or d[:2] != b"MZ":
+    raise SystemExit("error: packaged SteamSetup.exe precache is invalid")
+print(f"STEAMIOS_PACKAGED_STEAM_PRECACHE_OK bytes={len(d)}")
+PY
+
+test -s "$APP/Assets.car" || {
   echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
   exit 1
 }
