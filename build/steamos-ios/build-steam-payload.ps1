@@ -86,24 +86,32 @@ Remove-Item -Recurse -Force (Join-Path $steamRoot "dumps") -ErrorAction Silently
 Remove-Item -Recurse -Force (Join-Path $steamRoot "userdata") -ErrorAction SilentlyContinue
 Remove-Item -Force (Join-Path $steamRoot "config\loginusers.vdf") -ErrorAction SilentlyContinue
 
-$stagedSteam = Join-Path $OutputDir "Steam"
+$payload = Join-Path $OutputDir "SteamPayload.tar.gz"
 $metadata = Join-Path $OutputDir "SteamPayload.json"
-Remove-Item -Recurse -Force $stagedSteam -ErrorAction SilentlyContinue
-Remove-Item -Force $metadata -ErrorAction SilentlyContinue
+Remove-Item -Force $payload, $metadata -ErrorAction SilentlyContinue
 
-Move-Item -Force $steamRoot $stagedSteam
+$parent = Split-Path $steamRoot -Parent
+$leaf = Split-Path $steamRoot -Leaf
+& tar.exe -czf $payload -C $parent $leaf
+if ($LASTEXITCODE -ne 0) { throw "tar failed while packaging the preinstalled Steam client" }
+
+$payloadBytes = (Get-Item $payload).Length
+if ($payloadBytes -lt 50000000) { throw "Preinstalled Steam payload is unexpectedly small: $payloadBytes bytes" }
 
 $manifestSha = (Get-FileHash -Algorithm SHA256 $ManifestPath).Hash.ToLowerInvariant()
-$fileCount = (Get-ChildItem -Recurse -File $stagedSteam).Count
-$totalBytes = (Get-ChildItem -Recurse -File $stagedSteam | Measure-Object -Property Length -Sum).Sum
+$payloadSha = (Get-FileHash -Algorithm SHA256 $payload).Hash.ToLowerInvariant()
+$fileCount = (Get-ChildItem -Recurse -File $steamRoot).Count
+$totalBytes = (Get-ChildItem -Recurse -File $steamRoot | Measure-Object -Property Length -Sum).Sum
 
 @{
-    source_manifest = "https://client-update.akamai.steamstatic.com/steam_client_win32"
+    source_manifest = "https://client-update.akamai.steamstatic.com/steam_client_win64"
     source_manifest_sha256 = $manifestSha
     installer = $setupUrl
+    payload_sha256 = $payloadSha
+    payload_bytes = $payloadBytes
     expanded_files = $fileCount
     expanded_bytes = $totalBytes
     generated_utc = (Get-Date).ToUniversalTime().ToString("o")
 } | ConvertTo-Json | Set-Content -Encoding UTF8 $metadata
 
-Write-Host "STEAMIOS_FULL_STEAM_PAYLOAD_OK expanded_files=$fileCount expanded_bytes=$totalBytes"
+Write-Host "STEAMIOS_FULL_STEAM_PAYLOAD_OK sha256=$payloadSha archive_bytes=$payloadBytes expanded_files=$fileCount expanded_bytes=$totalBytes"
