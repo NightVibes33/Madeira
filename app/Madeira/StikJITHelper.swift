@@ -283,39 +283,107 @@ enum StikJITHelper {
         let earlyPoolSize = vm_address_t(madeira_early_pool_size)
         let poolGranularity = 16 << 20
 
-        func prepareExactPool(_ base: vm_address_t, _ size: Int, label: String) -> UnsafeMutableRawPointer? {
+        // A production JIT pool must be debugger-allocated RX memory.  An
+        // app-created vm_allocate() placeholder can reserve the right address,
+        // but StikDebug cannot reliably raise that existing object's maximum
+        // protection to EXEC on iOS 27.  The 2026-09-30 device trace proved the
+        // old in-place path could report success while the pool later appeared
+        // as prot=R-- / max=RW-, causing an immediate execute-fault storm at
+        // pool+0x8.  Use placeholders only as VA reservations: release the exact
+        // slice immediately before _M<size>,rx so debugserver creates the actual
+        // executable object.
+        func validateRXRange(_ base: vm_address_t, _ size: Int, label: String) -> Bool {
+            let end = base + vm_address_t(size)
+            var cursor = base
+
+            while cursor < end {
+                var regionBase = cursor
+                var regionSize: vm_size_t = 0
+                var info = vm_region_basic_info_data_64_t()
+                var count = mach_msg_type_number_t(MemoryLayout<vm_region_basic_info_data_64_t>.size / MemoryLayout<Int32>.size)
+                var objectName: mach_port_t = 0
+                let kr = withUnsafeMutablePointer(to: &info) {
+                    $0.withMemoryRebound(to: Int32.self, capacity: Int(count)) {
+                        vm_region_64(mach_task_self_, &regionBase, &regionSize,
+                                     VM_REGION_BASIC_INFO_64, $0, &count, &objectName)
+                    }
+                }
+                if objectName != 0 {
+                    mach_port_deallocate(mach_task_self_, objectName)
+                }
+
+                guard kr == KERN_SUCCESS,
+                      regionBase <= cursor,
+                      regionSize > 0,
+                      regionBase + vm_address_t(regionSize) > cursor else {
+                    LogStore.shared.log("\(label): vm_region failed at "
+                        + String(format: "0x%lx", Int(cursor)) + " kr=\(kr)", level: .error)
+                    return false
+                }
+
+                let curX = (info.protection & VM_PROT_EXECUTE) != 0
+                let maxX = (info.max_protection & VM_PROT_EXECUTE) != 0
+                guard curX && maxX else {
+                    LogStore.shared.log(String(format:
+                        "%@: NON-EXEC RX region 0x%lx+0x%lx prot=0x%x max=0x%x",
+                        label, Int(regionBase), Int(regionSize),
+                        info.protection, info.max_protection), level: .error)
+                    return false
+                }
+
+                cursor = min(end, regionBase + vm_address_t(regionSize))
+            }
+
+            LogStore.shared.log("\(label): full RX range is executable.", level: .success)
+            return true
+        }
+
+        func allocateDebuggerRXFromReservation(_ base: vm_address_t,
+                                               _ size: Int,
+                                               label: String) -> UnsafeMutableRawPointer? {
             guard base >= vm_address_t(goodLow),
                   base + vm_address_t(size) <= vm_address_t(guestLo),
-                  !overlapsExeWindow(base, vm_address_t(size)),
-                  let candidate = UnsafeMutableRawPointer(bitPattern: Int(base)) else {
-                LogStore.shared.log("\(label): rejected unsafe RX candidate", level: .error)
+                  !overlapsExeWindow(base, vm_address_t(size)) else {
+                LogStore.shared.log("\(label): rejected unsafe RX reservation", level: .error)
                 return nil
             }
 
-            // vm_allocate placeholders start RW-capable with current protection
-            // changed to NONE. Restore write access while StikDebug prepares the
-            // mapping, then lock the executable view back to RX.
-            let rwKr = vm_protect(mach_task_self_, base, vm_size_t(size), 0, VM_PROT_READ | VM_PROT_WRITE)
-            guard rwKr == KERN_SUCCESS else {
-                LogStore.shared.log("\(label): vm_protect(RW) failed kr=\(rwKr)", level: .error)
+            // Release only the slice the debugger needs.  Any unused tail stays
+            // reserved, so the just-opened hole remains deterministic first-fit.
+            let freeKr = vm_deallocate(mach_task_self_, base, vm_size_t(size))
+            guard freeKr == KERN_SUCCESS else {
+                LogStore.shared.log("\(label): failed to release RX reservation kr=\(freeKr)", level: .error)
                 return nil
             }
 
-            guard let prepared = jit26_prepare_region(candidate, size), prepared == candidate else {
-                LogStore.shared.log("\(label): StikDebug refused exact region at "
-                    + String(format: "0x%lx", Int(base)), level: .error)
+            guard let p = jit26_prepare_region(nil, size),
+                  p != UnsafeMutableRawPointer(bitPattern: 0) else {
+                LogStore.shared.log("\(label): StikDebug RX allocation failed", level: .error)
                 return nil
             }
 
-            let rxKr = vm_protect(mach_task_self_, base, vm_size_t(size), 0, VM_PROT_READ | VM_PROT_EXECUTE)
-            guard rxKr == KERN_SUCCESS else {
-                LogStore.shared.log("\(label): vm_protect(RX) failed kr=\(rxKr)", level: .error)
+            let actual = vm_address_t(bitPattern: p)
+            let unsafeGuest = actual + vm_address_t(size) > vm_address_t(guestLo)
+                && actual < vm_address_t(guestHi)
+            if actual < vm_address_t(goodLow)
+                || unsafeGuest
+                || overlapsExeWindow(actual, vm_address_t(size)) {
+                LogStore.shared.log(String(format:
+                    "%@: debugger returned unsafe RX 0x%lx+%luMB; rejecting",
+                    label, Int(actual), Int(size >> 20)), level: .error)
+                _ = vm_deallocate(mach_task_self_, actual, vm_size_t(size))
                 return nil
             }
 
-            LogStore.shared.log(String(format: "%@: exact StikDebug RX pool prepared at 0x%lx+%luMB",
-                                       label, Int(base), Int(size >> 20)), level: .success)
-            return candidate
+            guard validateRXRange(actual, size, label: label + " debugger-RX") else {
+                _ = vm_deallocate(mach_task_self_, actual, vm_size_t(size))
+                return nil
+            }
+
+            LogStore.shared.log(String(format:
+                "%@: debugger RX pool allocated at 0x%lx+%luMB (reserved base 0x%lx)",
+                label, Int(actual), Int(size >> 20), Int(base)), level: .success)
+            return p
         }
 
         // Fast deterministic path: the C constructor claimed this VA before
@@ -331,7 +399,9 @@ enum StikJITHelper {
             }
 
             if poolSize >= 256 << 20 {
-                rxPtrOpt = prepareExactPool(earlyPoolBase, poolSize, label: "startup-reservation")
+                rxPtrOpt = allocateDebuggerRXFromReservation(
+                    earlyPoolBase, poolSize, label: "startup-reservation"
+                )
                 if rxPtrOpt != nil && earlyPoolSize > vm_address_t(poolSize) {
                     let tailBase = earlyPoolBase + vm_address_t(poolSize)
                     let tailSize = earlyPoolSize - vm_address_t(poolSize)
@@ -400,9 +470,13 @@ enum StikJITHelper {
                 var fixed = exactBase
                 let allocKr = vm_allocate(mach_task_self_, &fixed, vm_size_t(poolSize), 0 /* FIXED, no overwrite */)
                 if allocKr == KERN_SUCCESS && fixed == exactBase {
-                    rxPtrOpt = prepareExactPool(exactBase, poolSize, label: "hole-reservation")
+                    rxPtrOpt = allocateDebuggerRXFromReservation(
+                        exactBase, poolSize, label: "hole-reservation"
+                    )
                     if rxPtrOpt == nil {
-                        _ = vm_deallocate(mach_task_self_, exactBase, vm_size_t(poolSize))
+                        // allocateDebuggerRXFromReservation already released the
+                        // reservation before asking StikDebug; nothing remains
+                        // at exactBase to tear down here.
                     }
                 } else {
                     if allocKr == KERN_SUCCESS {
@@ -446,6 +520,13 @@ enum StikJITHelper {
         }
         let rxAddr = Int(bitPattern: rxPtr)
         LogStore.shared.log("RX pool at \(String(format: "%p", rxAddr))")
+
+        guard validateRXRange(vm_address_t(bitPattern: rxPtr), poolSize,
+                              label: "pre-remap RX validation") else {
+            LogStore.shared.log("Refusing to start Wine with a non-executable JIT pool.", level: .error)
+            _ = vm_deallocate(mach_task_self_, vm_address_t(bitPattern: rxPtr), vm_size_t(poolSize))
+            return nil
+        }
 
         // Create RW mapping via vm_remap
         var rwAddr: vm_address_t = 0
@@ -627,6 +708,18 @@ enum StikJITHelper {
         // file) — the ml358 run lost it because the jit_log callback only fed
         // the UI view. Detail (kr / footprint delta) is in the jit_log lines.
         LogStore.shared.log("[no-footprint] pool applied=\(exempt)", level: exempt ? .success : .error)
+
+        // A shared-object bookkeeping operation must never silently destroy the
+        // executable view.  The 2026-09-30 crash showed pool pages reaching Wine
+        // as prot=R--/max=RW-.  Verify again after every alias/ledger operation.
+        guard validateRXRange(vm_address_t(bitPattern: rxPtr), poolSize,
+                              label: "post-alias RX validation") else {
+            LogStore.shared.log("JIT pool lost execute permission before Wine startup; aborting safely.",
+                                level: .error)
+            _ = vm_deallocate(mach_task_self_, rwAddr, vm_size_t(poolSize))
+            _ = vm_deallocate(mach_task_self_, vm_address_t(bitPattern: rxPtr), vm_size_t(poolSize))
+            return nil
+        }
 
         LogStore.shared.log("JIT pool ready (debugger still attached).", level: .success)
 
