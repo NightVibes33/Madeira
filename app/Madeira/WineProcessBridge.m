@@ -317,8 +317,8 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
 
         [fm createDirectoryAtPath:prefix withIntermediateDirectories:YES attributes:nil error:nil];
 
+        NSString *tgz = [[NSBundle mainBundle] pathForResource:@"prefix-template" ofType:@"tar.gz"];
         if (![fm fileExistsAtPath:stamp]) {
-            NSString *tgz = [[NSBundle mainBundle] pathForResource:@"prefix-template" ofType:@"tar.gz"];
             if (!tgz) {
                 LOG("prefix-template.tar.gz missing from bundle!");
             } else {
@@ -328,6 +328,37 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
                 } else {
                     LOG("prefix seeded to %{public}s", prefix_path);
                 }
+            }
+        }
+
+        /* SteamIOS shipping path: the complete Valve Win64 client is part of
+         * prefix-template.tar.gz. Existing app containers may have a prefix
+         * created by an older IPA that only bundled SteamSetup.exe. Repair just
+         * the Steam subtree in that case; never overwrite registry/user data. */
+        NSString *steamDir = [prefix stringByAppendingPathComponent:
+            @"drive_c/Program Files (x86)/Steam"];
+        NSString *steamExe = [steamDir stringByAppendingPathComponent:@"steam.exe"];
+        NSString *steamClient = [steamDir stringByAppendingPathComponent:@"steamclient64.dll"];
+        NSString *steamMarker = [steamDir stringByAppendingPathComponent:@".steamios-bundled-client"];
+        BOOL steamReady = [fm fileExistsAtPath:steamExe] &&
+                          [fm fileExistsAtPath:steamClient] &&
+                          [fm fileExistsAtPath:steamMarker];
+        if (!steamReady) {
+            if (!tgz) {
+                LOG("Steam migration unavailable: prefix-template.tar.gz missing");
+            } else {
+                LOG("Repairing bundled Steam client into existing Wine prefix...");
+                int src = madeira_extract_prefix_subtree_tgz(
+                    tgz.UTF8String, prefix_path,
+                    "drive_c/Program Files (x86)/Steam");
+                steamReady = (src == 0 &&
+                              [fm fileExistsAtPath:steamExe] &&
+                              [fm fileExistsAtPath:steamClient] &&
+                              [fm fileExistsAtPath:steamMarker]);
+                if (steamReady)
+                    LOG("Bundled Steam client ready at %{public}s", steamDir.UTF8String);
+                else
+                    LOG("Bundled Steam client repair FAILED");
             }
         }
 
