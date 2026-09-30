@@ -135,6 +135,12 @@ int wineserver_start(const char *prefix_path) {
         return 0;
     }
 
+    /* Restart safety: wineserver_stop() sets this process-global flag. The old
+     * code never cleared it, so a Retry launched a new server thread that saw
+     * "stop requested" immediately and exited underneath Wine. */
+    g_wineserver_should_stop = 0;
+    g_wineserver_thread = (pthread_t)0;
+
     // Store prefix path
     if (g_prefix_path) free(g_prefix_path);
     g_prefix_path = strdup(prefix_path);
@@ -193,6 +199,7 @@ void wineserver_stop(void) {
         wine_log_msg("Joining wineserver thread...");
         pthread_join(t, NULL);
         wine_log_msg("Wineserver thread joined");
+        g_wineserver_thread = (pthread_t)0;
     }
     g_wineserver_running = 0;
 }
