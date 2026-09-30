@@ -1,2 +1,2 @@
-trigger=steamios-windowless-steam-x18-landscape-20260930-v2
-purpose=fix-steam-x18-trampoline-freeze-remove-explorer-cmd-unify-landscape-frame-and-refresh-ci
+trigger=steamios-windowless-steam-x18-landscape-20260930-v3
+purpose=retry-pinned-fex-submodules-and-build-windowless-launcher-in-granular-ci

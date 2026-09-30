@@ -136,10 +136,28 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/verify-madeira-pins.py
-          git submodule update --init --recursive --depth 1 FEX
-          git submodule update --init --depth 1 wine
-          git submodule update --init --depth 1 research/dxmt
-          git -C research/dxmt submodule update --init --recursive --depth 1 include/native/directx
+
+          retry_cmd() {
+            local label="$1"; shift
+            local attempt
+            for attempt in 1 2 3 4; do
+              if "$@"; then
+                echo "STEAMOS_IOS_SUBMODULE_RETRY_OK label=$label attempt=$attempt"
+                return 0
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "error: $label failed after $attempt attempts" >&2
+                return 1
+              fi
+              echo "warning: $label fetch failed on attempt $attempt; retrying pinned commit" >&2
+              sleep $((attempt * 10))
+            done
+          }
+
+          retry_cmd FEX git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 FEX
+          retry_cmd wine git -c http.version=HTTP/1.1 submodule update --init --depth 1 wine
+          retry_cmd dxmt git -c http.version=HTTP/1.1 submodule update --init --depth 1 research/dxmt
+          retry_cmd directx git -C research/dxmt -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 include/native/directx
           bash tools/bootstrap/fetch-llvm-mingw.sh
           bash tools/runtime-deps/fetch-freetype.sh
           bash tools/runtime-deps/fetch-llvm-project.sh
@@ -202,7 +220,10 @@ jobs:
           python3 -c 'from packaging.version import Version; assert Version("24.2") == Version("24.2")'
           bash build/fex-arm64ec/build.sh
           bash build/fex-wow64/build.sh
+          bash build/steamios-launcher/build.sh
+          test -s app/Madeira/aarch64-windows/steamios-launcher.exe
           echo "STEAMOS_IOS_FEX_TRANSLATORS_OK"
+          echo "STEAMOS_IOS_WINDOWLESS_LAUNCHER_BUILT"
 
       - name: Configure Wine host headers
         shell: bash

@@ -129,6 +129,8 @@ jobs:
           test -s build/steamios-launcher/steamios-launcher.c
           test -s build/steamios-launcher/build.sh
           grep -F 'bash build/steamios-launcher/build.sh' build/steamos-ios/build-clean-app.sh
+          grep -F 'bash build/steamios-launcher/build.sh' .github/workflows/steamos-ios-app.yml
+          grep -F 'STEAMOS_IOS_SUBMODULE_RETRY_OK' .github/workflows/steamos-ios-app.yml
           grep -F 'setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)' app/Madeira/ContentView.swift
           grep -F 'CreateProcessW' build/steamios-launcher/steamios-launcher.c
           grep -F 'services.exe' build/steamios-launcher/steamios-launcher.c
