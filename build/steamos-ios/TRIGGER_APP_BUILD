@@ -1,2 +1,2 @@
-trigger=steamios-full-steam-post-spawn-landscape-20260929
-purpose=ship-preinstalled-steam-and-rotate-only-after-steam-surface
+trigger=steamios-full-steam-final-prefix-verify-20260929
+purpose=final-full-steam-build-after-payload-cache-and-pipefail-safe-verification
