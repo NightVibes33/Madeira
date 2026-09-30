@@ -55,13 +55,13 @@ jobs:
         run: |
           set -euo pipefail
           tag="steamios-build-77"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" \
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
               --target "34062610874779dfd905980899dd3dc7c6c8db29" \
               --title "SteamIOS build 77" \
               --notes "Green unsigned Debug IPA from workflow run 36672560934. Includes the preinstalled Windows Steam client and post-Steam landscape handoff."
           fi
-          gh release upload "$tag" \
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
             release/SteamIOS.ipa \
             release/SteamIOS.ipa.sha256 \
             release/build-info.json \
