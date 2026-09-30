@@ -129,13 +129,15 @@ jobs:
           grep -F 'cmd /c C:\\\(batch)' app/Madeira/ContentView.swift
           ! grep -F 'cmd /c C:\\\\(batch)' app/Madeira/ContentView.swift
 
-      - name: Verify Steam first-run bootstrap
+      - name: Verify preinstalled Steam shipping path
         shell: bash
         run: |
-          grep -F 'https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe' app/Madeira/ContentView.swift
-          grep -F 'C:\\SteamSetup.exe /S' app/Madeira/ContentView.swift
-          grep -F 'steam-bootstrap.bat' app/Madeira/ContentView.swift
+          grep -F 'SteamPayload.tar.gz' build/steamos-ios/build-clean-app.sh
+          grep -F '.steamios-bundled-client' app/Madeira/ContentView.swift
+          grep -F 'madeira_extract_prefix_subtree_tgz' app/Madeira/WineProcessBridge.m
           grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
+          ! grep -F 'SteamSetup.exe /S' app/Madeira/ContentView.swift
+          ! grep -F 'Installing Steam' app/Madeira/ContentView.swift
 
       - name: Verify first-run Wine prefix seed
         shell: bash
