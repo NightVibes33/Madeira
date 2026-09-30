@@ -206,6 +206,9 @@ jobs:
           grep -F 'private func startSteamAutomatically()' app/Madeira/ContentView.swift
           grep -F 'private func launchSteamProductRuntime()' app/Madeira/ContentView.swift
           grep -F 'private var steamProductBody: some View' app/Madeira/ContentView.swift
+          grep -F 'if case .failed(let message) = productState' app/Madeira/ContentView.swift
+          ! grep -F 'return "Starting Steam"' app/Madeira/ContentView.swift
+          ! grep -F 'return "Launching Steam"' app/Madeira/ContentView.swift
           grep -F 'StikJITHelper.enableJIT' app/Madeira/ContentView.swift
           grep -F '@Published var touchScreenEnabled = true' app/Madeira/ContentView.swift
           grep -F '@Published var directTouch = true' app/Madeira/ContentView.swift
