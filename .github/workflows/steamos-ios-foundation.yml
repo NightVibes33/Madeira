@@ -140,6 +140,8 @@ jobs:
           grep -F 'winios_set_product_visible(0)' app/Madeira/ContentView.swift
           grep -F 'winios_set_product_visible(steamSettingsPresented ? 0 : 1)' app/Madeira/ContentView.swift
           grep -F '[x18-xzr-recover] ml1137' build/ntdll-unix/signal_arm64_ios.c
+          grep -F 'ml1138: MOV XZR, X18 is a semantic no-op' build/ntdll-unix/virtual_ios.c
+          grep -F 'if (rd == 31)' build/ntdll-unix/virtual_ios.c
 
       - name: Verify preinstalled Steam shipping path
         shell: bash

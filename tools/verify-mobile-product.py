@@ -12,6 +12,7 @@ GAMEPAD = (ROOT / "app/Madeira/GamepadInput.swift").read_text()
 TOUCH = (ROOT / "app/Madeira/TouchGamepad.swift").read_text()
 WINE = (ROOT / "app/Madeira/WineProcessBridge.m").read_text()
 SIGNAL = (ROOT / "build/ntdll-unix/signal_arm64_ios.c").read_text()
+VIRTUAL = (ROOT / "build/ntdll-unix/virtual_ios.c").read_text()
 LAUNCHER = (ROOT / "build/steamios-launcher/steamios-launcher.c").read_text()
 CLEAN_BUILD = (ROOT / "build/steamos-ios/build-clean-app.sh").read_text()
 STIK = (ROOT / "app/Madeira/StikJITHelper.swift").read_text()
@@ -52,6 +53,9 @@ require("let presentation = convert(gameRect(), to: w)", CONTENT,
 require("void winios_set_product_visible(int visible);", WINIOS_H,
         "compositor visibility API")
 require("[x18-xzr-recover] ml1137", SIGNAL, "malformed x18/XZR trampoline recovery")
+require("ml1138: MOV XZR, X18 is a semantic no-op", VIRTUAL,
+        "x18 patcher register-31 generation fix")
+require("if (rd == 31)", VIRTUAL, "x18 patcher must never emit an SP-based TSD load for XZR")
 for legacy in (
     "Install Madeira via SideStore or Xcode",
     "Reinstall Madeira with the same IPA",

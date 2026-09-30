@@ -4610,6 +4610,26 @@ int ios_jit_patch_x18(char *text_rw, char *text_rx, size_t text_size,
         if (is_mov_from_x18)
         {
             int rd = insn & 0x1f;
+
+            /* ml1138: MOV XZR, X18 is a semantic no-op. Never trampoline it.
+             *
+             * Register 31 is XZR for MRS/logical instructions but SP when it
+             * is the base register of LDR. The old generic sequence for rd=31
+             * therefore became:
+             *   mrs xzr, TPIDRRO_EL0
+             *   and xzr, xzr, #~7
+             *   ldr xzr, [sp, #TSD_OFFSET]
+             * and early ARM64EC startup has SP==0, producing the exact
+             * fault_addr==TSD_OFFSET death seen while starting Steam.
+             *
+             * The original MOV XZR,X18 discards its result and has no side
+             * effects, so leaving it untouched is the only correct rewrite. */
+            if (rd == 31)
+            {
+                skipped++;
+                continue;
+            }
+
             /* mrs xRd, TPIDRRO_EL0 */
             *(uint32_t *)(tramp_rw + tramp_off) = 0xD53BD060 | rd;
             tramp_off += 4;
