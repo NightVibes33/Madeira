@@ -1115,6 +1115,11 @@ struct ContentView: View {
                 }
             }
             .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+                if productState == .installingSteam && steamIsInstalled() {
+                    logStore.log("Steam installer completion marker detected.", level: .success)
+                    productState = .launchingSteam
+                }
+
                 guard productState == .launchingSteam else { return }
                 let dxmtReady = Int(madeira_get_present_count()) > presentBaseline
                 let steamSurfaceReady = winios_get_surface_present_count() > compositorBaseline
@@ -1236,8 +1241,6 @@ struct ContentView: View {
             productState = .installingSteam
             Task { @MainActor in
                 await bootstrapSteamFirstRun(deskW: deskW, deskH: deskH)
-                if case .failed = self.productState { return }
-                self.productState = .launchingSteam
             }
             return
         }
@@ -1248,7 +1251,14 @@ struct ContentView: View {
         }
         configureSteamProductRuntime(batch: "steam-launch.bat", deskW: deskW, deskH: deskH)
         productState = .launchingSteam
-        runWineFullSequence()
+        runWineFullSequence { exitCode in
+            DispatchQueue.main.async {
+                if self.productState != .running {
+                    self.productState = .failed(
+                        "Wine/Steam exited before creating a display surface (exit \(exitCode)).")
+                }
+            }
+        }
     }
 
     /// Portrait: classic tooling layout — header, badges, 240pt game strip,
@@ -1903,9 +1913,10 @@ struct ContentView: View {
     /// Full sequence: allocate JIT pool, start wineserver, start Wine.
     /// Debugger stays attached during PE loading so mprotect_exec can use BRK
     /// to prepare code pages. Detach happens after Wine finishes + recovery.
-    private func runWineFullSequence() {
+    private func runWineFullSequence(completion: @escaping (Int) -> Void = { _ in }) {
         guard SteamOSRuntimeGate.validate(log: logStore) else {
             productState = .failed("Local JIT/Metal runtime validation failed before Windows launch.")
+            completion(-1000)
             return
         }
         /* ml1095: one config file. Written once from any legacy madeira-*.txt. */
@@ -2332,6 +2343,7 @@ struct ContentView: View {
                     self.productState = .failed("Executable JIT pool setup failed after JIT attached. Check the JIT log and retry.")
                 }
                 logStore.uiPaused = false
+                completion(-1001)
                 return
             }
 
@@ -2376,13 +2388,27 @@ struct ContentView: View {
             winios_phase("detach-done")
 
             // Step 2: Start wineserver
-            self.startWineserver()
+            guard self.startWineserver() else {
+                DispatchQueue.main.async {
+                    self.productState = .failed("Wineserver failed to start.")
+                    logStore.uiPaused = false
+                }
+                completion(-1002)
+                return
+            }
             winios_phase("wineserver-up")
 
-            // Step 3: Start Wine (debugger still attached for PE loading BRK calls)
+            // Step 3: Start Wine
             Thread.sleep(forTimeInterval: 2.0)
             winios_phase("wine-start")
-            self.startWineProcess()
+            guard self.startWineProcess() else {
+                DispatchQueue.main.async {
+                    self.productState = .failed("Wine process failed to start.")
+                    logStore.uiPaused = false
+                }
+                completion(-1003)
+                return
+            }
 
             // Step 4: Wait for Wine to finish instead of fixed timer
             // Poll wine_process_is_running() — it clears when __wine_main returns
@@ -2450,7 +2476,14 @@ struct ContentView: View {
                 }
             }
             let wineElapsed = CFAbsoluteTimeGetCurrent() - pollStart
-            logStore.log("Wine finished after \(String(format: "%.1f", wineElapsed))s")
+            let wineStillRunning = wine_process_is_running() != 0
+            let wineExitCode = wineStillRunning ? 0 : Int(wine_process_last_exit_code())
+            if wineStillRunning {
+                logStore.log("Wine still active after detach-wait (\(String(format: "%.1f", wineElapsed))s)")
+            } else {
+                logStore.log("Wine exited after \(String(format: "%.1f", wineElapsed))s with code \(wineExitCode)",
+                             level: wineExitCode == 0 ? .info : .error)
+            }
 
             // Step 5: Resume UI + os_log, give main thread time to recover before detach
             DispatchQueue.main.async {
@@ -2464,6 +2497,9 @@ struct ContentView: View {
             StikJITHelper.detachDebugger()
 
             DispatchQueue.main.async { heartbeat.invalidate() }
+            if !wineStillRunning {
+                completion(wineExitCode)
+            }
         }
     }
 
@@ -2481,8 +2517,14 @@ struct ContentView: View {
         return candidates.first(where: { fm.fileExists(atPath: "\($0.1)/steam.exe") })
     }
 
+    private func steamInstallMarkerURL() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("wine/drive_c/.steamios-steam-installed")
+    }
+
     private func steamIsInstalled() -> Bool {
-        steamInstallLocation() != nil
+        guard steamInstallLocation() != nil else { return false }
+        return FileManager.default.fileExists(atPath: steamInstallMarkerURL().path)
     }
 
     /// Configure the normal Steam product session.
@@ -2547,17 +2589,26 @@ struct ContentView: View {
                                 "Wine prefix bootstrap did not create drive_c"])
             }
 
-            let data: Data
-            if let cachedURL = Bundle.main.url(forResource: "SteamSetup",
-                                               withExtension: "exe",
-                                               subdirectory: "SteamPrecache"),
-               let cachedData = try? Data(contentsOf: cachedURL),
-               cachedData.count >= 1_000_000,
-               cachedData[cachedData.startIndex] == 0x4d,
-               cachedData[cachedData.index(after: cachedData.startIndex)] == 0x5a {
-                data = cachedData
-                logStore.log("Steam first run: using bundled SteamSetup.exe precache (\(cachedData.count) bytes)", level: .success)
+            func validSteamSetup(_ data: Data) -> Bool {
+                data.count >= 1_000_000 &&
+                data[data.startIndex] == 0x4d &&
+                data[data.index(after: data.startIndex)] == 0x5a
+            }
+
+            if let existing = try? Data(contentsOf: setupURL), validSteamSetup(existing) {
+                // Preferred path: clean builds inject SteamSetup.exe directly into
+                // prefix-template.tar.gz, so a brand-new prefix already has C:\SteamSetup.exe.
+                logStore.log("Steam first run: prefix-template precache ready (\(existing.count) bytes)", level: .success)
+            } else if let cachedURL = Bundle.main.url(forResource: "SteamSetup",
+                                                      withExtension: "exe",
+                                                      subdirectory: "SteamPrecache"),
+                      let cachedData = try? Data(contentsOf: cachedURL),
+                      validSteamSetup(cachedData) {
+                // Migration path for an already-seeded prefix created by an older IPA.
+                try cachedData.write(to: setupURL, options: .atomic)
+                logStore.log("Steam first run: repaired prefix from bundled precache (\(cachedData.count) bytes)", level: .success)
             } else {
+                // Last resort only. Normal fresh installs should never need network here.
                 logStore.log("Steam precache unavailable/invalid; downloading Valve SteamSetup.exe...")
                 let (downloaded, response) = try await URLSession.shared.data(from: officialURL)
 
@@ -2566,23 +2617,21 @@ struct ContentView: View {
                                   userInfo: [NSLocalizedDescriptionKey: "Steam download HTTP \(http.statusCode)"])
                 }
 
-                guard downloaded.count >= 1_000_000,
-                      downloaded[downloaded.startIndex] == 0x4d,
-                      downloaded[downloaded.index(after: downloaded.startIndex)] == 0x5a else {
+                guard validSteamSetup(downloaded) else {
                     throw NSError(domain: "SteamBootstrap", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey: "Downloaded SteamSetup.exe is not a valid PE payload"])
                 }
-                data = downloaded
-                logStore.log("SteamSetup.exe CDN fallback ready (\(downloaded.count) bytes)", level: .success)
+                try downloaded.write(to: setupURL, options: .atomic)
+                logStore.log("SteamSetup.exe CDN fallback staged (\(downloaded.count) bytes)", level: .success)
             }
-
-            try data.write(to: setupURL, options: .atomic)
-            logStore.log("SteamSetup.exe staged into C:\\ from precache/fallback", level: .success)
 
             let bat = """
             @echo off\r
+            if not exist "C:\\SteamSetup.exe" exit /b 10\r
             C:\\SteamSetup.exe /S\r
-            if not exist "C:\\Program Files (x86)\\Steam\\steam.exe" exit /b 2\r
+            if errorlevel 1 exit /b 11\r
+            if not exist "C:\\Program Files (x86)\\Steam\\steam.exe" exit /b 12\r
+            >"C:\\.steamios-steam-installed" echo SteamIOS installer completed\r
             start "" "C:\\windows\\system32\\services.exe"\r
             cd /d "C:\\Program Files (x86)\\Steam"\r
             rem CEF stays software-rasterized during bring-up; games still use local DXMT/D3D12 -> Metal.\r
@@ -2596,7 +2645,19 @@ struct ContentView: View {
                                          deskW: deskW, deskH: deskH)
 
             logStore.log("Launching official Steam installer through Wine WoW64 + FEX...", level: .success)
-            runWineFullSequence()
+            runWineFullSequence { exitCode in
+                DispatchQueue.main.async {
+                    if self.steamIsInstalled() {
+                        if self.productState == .installingSteam {
+                            self.productState = .launchingSteam
+                        }
+                        self.logStore.log("Steam installer completed; Steam runtime is present.", level: .success)
+                    } else if self.productState != .running {
+                        self.productState = .failed(
+                            "Steam installer/Wine exited before completing (exit \(exitCode)). The prefix will be repaired from the bundled precache on Retry.")
+                    }
+                }
+            }
         } catch {
             logStore.log("Steam first-run bootstrap failed: \(error.localizedDescription)", level: .error)
             productState = .failed("Steam installation failed: \(error.localizedDescription)")
@@ -2634,7 +2695,7 @@ struct ContentView: View {
         return true
     }
 
-    private func startWineserver() {
+    private func startWineserver() -> Bool {
         logStore.log("Starting wineserver...")
 
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -2645,17 +2706,19 @@ struct ContentView: View {
         let result = wineserver_start(winePrefixPath)
         if result == 0 {
             logStore.log("Wineserver thread launched successfully", level: .success)
+            return true
         } else {
             logStore.log("Failed to start wineserver (error: \(result))", level: .error)
+            return false
         }
     }
 
-    private func startWineProcess() {
+    private func startWineProcess() -> Bool {
         logStore.log("Starting Wine process...")
 
         if wineserver_is_running() == 0 {
             logStore.log("Wineserver not running! Start it first.", level: .error)
-            return
+            return false
         }
 
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -2665,8 +2728,10 @@ struct ContentView: View {
         let result = wine_process_start(winePrefixPath)
         if result == 0 {
             logStore.log("Wine process thread launched", level: .success)
+            return true
         } else {
             logStore.log("Failed to start Wine process (error: \(result))", level: .error)
+            return false
         }
     }
 
