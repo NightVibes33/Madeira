@@ -65,6 +65,8 @@ require('components.scheme = "stikdebug"', STIK, "official StikDebug URL scheme"
 require('URLQueryItem(name: "bundle-id"', STIK, "StikDebug bundle targeting")
 require('URLQueryItem(name: "pid"', STIK, "StikDebug PID targeting")
 require('URLQueryItem(name: "script-data"', STIK, "developer-defined StikDebug script")
+require("private static var resolvedScriptBase64: String?", STIK, "single bundled JIT script source")
+forbid("private static let scriptBase64", STIK, "stale embedded JIT script duplicate")
 require('checkAppEntitlement("get-task-allow")', STIK, "host get-task-allow preflight")
 require("jit_check_debugged() && isDebuggerAttached()", STIK, "live debugger readiness")
 require("__attribute__((noinline, optnone, naked))", JIT, "universal naked BRK ABI")

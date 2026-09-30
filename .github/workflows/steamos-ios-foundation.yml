@@ -183,6 +183,8 @@ jobs:
           grep -F 'URLQueryItem(name: "bundle-id"' app/Madeira/StikJITHelper.swift
           grep -F 'URLQueryItem(name: "pid"' app/Madeira/StikJITHelper.swift
           grep -F 'URLQueryItem(name: "script-data"' app/Madeira/StikJITHelper.swift
+          grep -F 'private static var resolvedScriptBase64: String?' app/Madeira/StikJITHelper.swift
+          ! grep -F 'private static let scriptBase64' app/Madeira/StikJITHelper.swift
           grep -F 'checkAppEntitlement("get-task-allow")' app/Madeira/StikJITHelper.swift
           grep -F 'jit_check_debugged() && isDebuggerAttached()' app/Madeira/StikJITHelper.swift
           grep -F '__attribute__((noinline, optnone, naked))' app/Madeira/JITAllocator.c
