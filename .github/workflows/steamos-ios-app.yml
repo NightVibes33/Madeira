@@ -146,6 +146,13 @@ jobs:
           bash tools/runtime-deps/fetch-vcruntime.sh
           echo "STEAMOS_IOS_BOOTSTRAP_OK"
 
+      - name: Restore completed i386 Wine + DXMT farm
+        id: i386-farm-cache
+        uses: actions/cache@v4
+        with:
+          path: app/Madeira/i386-windows
+          key: steamios-i386-farm-xcode27-v1-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/bootstrap/fetch-llvm-mingw.sh', 'build/wine-i386/build.sh') }}
+
       - name: Restore compiled runtime cache
         uses: actions/cache@v4
         with:
@@ -212,11 +219,34 @@ jobs:
           echo "STEAMOS_IOS_WINE_HOST_CONFIG_OK"
 
       - name: Build i386 Wine and DXMT Windows farm
+        if: steps.i386-farm-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/wine-i386/build.sh
+
+      - name: Verify completed i386 Wine + DXMT farm
+        shell: bash
+        run: |
+          set -euo pipefail
+          farm="$PWD/app/Madeira/i386-windows"
+          count="$(find "$farm" -maxdepth 1 -type f ! -name '.gitkeep' | wc -l | tr -d ' ')"
+          [ "$count" -ge 500 ] || {
+            echo "error: cached i386 Wine farm incomplete ($count files; expected >=500)" >&2
+            exit 1
+          }
+          for f in             kernel32.dll ntdll.dll user32.dll gdi32.dll advapi32.dll             d3d11.dll dxgi.dll d3d10core.dll winemetal.dll             d3d9.dll d3d9-emulated.dll; do
+            test -s "$farm/$f" || {
+              echo "error: cached i386 Wine/DXMT output missing $f" >&2
+              exit 1
+            }
+          done
+          if [ "${{ steps.i386-farm-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "STEAMIOS_I386_FARM_CACHE_HIT files=$count"
+          else
+            echo "STEAMIOS_I386_FARM_BUILT_AND_VERIFIED files=$count"
+          fi
 
       - name: Build wineserver and Wine Unix bridges
         shell: bash
