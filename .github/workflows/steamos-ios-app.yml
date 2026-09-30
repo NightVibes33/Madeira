@@ -148,7 +148,7 @@ jobs:
 
       - name: Restore completed i386 Wine + DXMT farm
         id: i386-farm-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: app/Madeira/i386-windows
           key: steamios-i386-farm-xcode27-v1-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/bootstrap/fetch-llvm-mingw.sh', 'build/wine-i386/build.sh') }}
@@ -247,6 +247,13 @@ jobs:
           else
             echo "STEAMIOS_I386_FARM_BUILT_AND_VERIFIED files=$count"
           fi
+
+      - name: Save completed i386 Wine + DXMT farm
+        if: steps.i386-farm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/Madeira/i386-windows
+          key: ${{ steps.i386-farm-cache.outputs.cache-primary-key }}
 
       - name: Build wineserver and Wine Unix bridges
         shell: bash
