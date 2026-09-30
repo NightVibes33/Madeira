@@ -28,14 +28,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s dist/SteamIOS.ipa
-          test -s dist/build-info.json
-          test -s dist/SHA256SUMS
+          ipa="$(find dist -type f -name 'SteamIOS.ipa' -print -quit)"
+          info="$(find dist -type f -name 'build-info.json' -print -quit)"
+          sums="$(find dist -type f -name 'SHA256SUMS' -print -quit)"
+          ipa_sha="$(find dist -type f -name 'SteamIOS.ipa.sha256' -print -quit)"
+          test -n "$ipa" && test -s "$ipa"
+          test -n "$info" && test -s "$info"
+          test -n "$sums" && test -s "$sums"
+          test -n "$ipa_sha" && test -s "$ipa_sha"
           (
-            cd dist
-            sha256sum -c SHA256SUMS
+            cd "$(dirname "$sums")"
+            sha256sum -c "$(basename "$sums")"
           )
-          grep -F '"commit": "34062610874779dfd905980899dd3dc7c6c8db29"' dist/build-info.json
+          grep -F '"commit": "34062610874779dfd905980899dd3dc7c6c8db29"' "$info"
+          mkdir -p release
+          cp "$ipa" release/SteamIOS.ipa
+          cp "$ipa_sha" release/SteamIOS.ipa.sha256
+          cp "$info" release/build-info.json
+          cp "$sums" release/SHA256SUMS
           echo "STEAMIOS_77_RELEASE_GATE_OK"
 
       - name: Publish direct IPA release asset
@@ -46,7 +56,15 @@ jobs:
           set -euo pipefail
           tag="steamios-build-77"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag"               --target "34062610874779dfd905980899dd3dc7c6c8db29"               --title "SteamIOS build 77"               --notes "Green unsigned Debug IPA from workflow run 36672560934. Includes the preinstalled Windows Steam client and post-Steam landscape handoff."
+            gh release create "$tag" \
+              --target "34062610874779dfd905980899dd3dc7c6c8db29" \
+              --title "SteamIOS build 77" \
+              --notes "Green unsigned Debug IPA from workflow run 36672560934. Includes the preinstalled Windows Steam client and post-Steam landscape handoff."
           fi
-          gh release upload "$tag"             dist/SteamIOS.ipa             dist/SteamIOS.ipa.sha256             dist/build-info.json             dist/SHA256SUMS             --clobber
+          gh release upload "$tag" \
+            release/SteamIOS.ipa \
+            release/SteamIOS.ipa.sha256 \
+            release/build-info.json \
+            release/SHA256SUMS \
+            --clobber
           echo "STEAMIOS_77_RELEASE_PUBLISHED"
