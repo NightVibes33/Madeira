@@ -133,11 +133,11 @@ echo "STEAMOS_IOS_WOW64_PAYLOAD_OK files=$i386_count"
 # workflow's Windows job. Merge that finished client directly into the bundled
 # Wine prefix. The iPhone never runs SteamSetup.exe.
 STEAM_PAYLOAD_DIR="$R/build/steamos-steam-payload"
-STEAM_SOURCE="$STEAM_PAYLOAD_DIR/Steam"
+STEAM_PAYLOAD="$STEAM_PAYLOAD_DIR/SteamPayload.tar.gz"
 STEAM_PAYLOAD_META="$STEAM_PAYLOAD_DIR/SteamPayload.json"
 
-test -d "$STEAM_SOURCE" || {
-  echo "error: preinstalled Steam directory was not downloaded from the Windows staging job" >&2
+test -s "$STEAM_PAYLOAD" || {
+  echo "error: preinstalled SteamPayload.tar.gz was not downloaded from the Windows staging job" >&2
   exit 1
 }
 test -s "$STEAM_PAYLOAD_META" || {
@@ -145,44 +145,51 @@ test -s "$STEAM_PAYLOAD_META" || {
   exit 1
 }
 
-python3 - "$STEAM_SOURCE" "$STEAM_PAYLOAD_META" <<'PY'
-import json, pathlib, sys
-steam = pathlib.Path(sys.argv[1])
+python3 - "$STEAM_PAYLOAD" "$STEAM_PAYLOAD_META" <<'PY'
+import json, pathlib, sys, tarfile
+payload = pathlib.Path(sys.argv[1])
 meta = pathlib.Path(sys.argv[2])
-required = [
-    steam / "steam.exe",
-    steam / "steamclient.dll",
-    steam / "steamclient64.dll",
-    steam / "steamui.dll",
-    steam / "bin/cef/cef.win7x64/steamwebhelper.exe",
-]
-missing = [str(p.relative_to(steam)) for p in required if not p.is_file()]
+required = {
+    "Steam/steam.exe",
+    "Steam/steamclient.dll",
+    "Steam/steamclient64.dll",
+    "Steam/steamui.dll",
+    "Steam/bin/cef/cef.win7x64/steamwebhelper.exe",
+}
+with tarfile.open(payload, "r:gz") as tf:
+    names = {n.replace("\\", "/").lstrip("./") for n in tf.getnames()}
+missing = sorted(required - names)
 if missing:
-    raise SystemExit("error: preinstalled Steam directory incomplete: " + ", ".join(missing))
-if not ((steam / "package/steam_client_win64.installed").is_file() or
-        (steam / "package/steam_client_win32.installed").is_file()):
-    raise SystemExit("error: preinstalled Steam directory has no installed client manifest")
+    raise SystemExit("error: preinstalled Steam payload incomplete: " + ", ".join(missing))
+if not ({"Steam/package/steam_client_win64.installed", "Steam/package/steam_client_win32.installed"} & names):
+    raise SystemExit("error: preinstalled Steam payload has no installed client manifest")
 j = json.loads(meta.read_text(encoding="utf-8-sig"))
-if not j.get("source_manifest_sha256"):
+if not j.get("payload_sha256") or not j.get("source_manifest_sha256"):
     raise SystemExit("error: Steam payload metadata is incomplete")
-count = sum(1 for p in steam.rglob("*") if p.is_file())
-size = sum(p.stat().st_size for p in steam.rglob("*") if p.is_file())
-print(f"STEAMIOS_FULL_STEAM_STAGE_OK files={count} bytes={size}")
+print(f"STEAMIOS_FULL_STEAM_STAGE_OK archive_bytes={payload.stat().st_size} files={j.get('expanded_files')}")
 PY
 
-# Expand the base Wine prefix, replace only its Steam subtree with the fully
-# updated Windows client, and rebuild one self-contained prefix archive.
+# Expand the base Wine prefix and the fully-updated Steam archive, replace only
+# the Steam subtree, then rebuild one self-contained prefix archive.
 PREFIX_TEMPLATE="$R/app/Madeira/prefix-template.tar.gz"
 PREFIX_WORK="$(mktemp -d)"
+STEAM_WORK="$(mktemp -d)"
 PREFIX_NEW="$R/app/Madeira/prefix-template.tar.gz.full-steam"
-trap 'rm -rf "$PREFIX_WORK" "$PREFIX_NEW"' EXIT
+trap 'rm -rf "$PREFIX_WORK" "$STEAM_WORK" "$PREFIX_NEW"' EXIT
 
 tar -xzf "$PREFIX_TEMPLATE" -C "$PREFIX_WORK"
+tar -xzf "$STEAM_PAYLOAD" -C "$STEAM_WORK"
+
 DRIVE_C="$(find "$PREFIX_WORK" -type d -name drive_c -print -quit)"
+STEAM_SOURCE="$STEAM_WORK/Steam"
 if [ -z "$DRIVE_C" ] || [ ! -d "$DRIVE_C" ]; then
   echo "error: prefix-template.tar.gz has no drive_c" >&2
   exit 1
 fi
+test -d "$STEAM_SOURCE" || {
+  echo "error: SteamPayload.tar.gz has no Steam root" >&2
+  exit 1
+}
 
 STEAM_DEST="$DRIVE_C/Program Files (x86)/Steam"
 rm -rf "$STEAM_DEST"
