@@ -150,3 +150,6 @@ app/Madeira/i386-windows/*
 
 # Generated from the tracked SteamIOS icon source by build-clean-app.sh
 app/Madeira/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+\n# Clean-build Steam installer precache (generated from Valve CDN)
+app/Madeira/SteamPrecache/*
+!app/Madeira/SteamPrecache/.gitkeep
