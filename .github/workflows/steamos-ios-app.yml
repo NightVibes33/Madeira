@@ -30,8 +30,8 @@ jobs:
         shell: pwsh
         run: |
           $ProgressPreference = "SilentlyContinue"
-          $manifest = Join-Path $env:RUNNER_TEMP "steam_client_win32"
-          Invoke-WebRequest -UseBasicParsing -Uri "https://client-update.akamai.steamstatic.com/steam_client_win32" -OutFile $manifest
+          $manifest = Join-Path $env:RUNNER_TEMP "steam_client_win64"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://client-update.akamai.steamstatic.com/steam_client_win64" -OutFile $manifest
           $sha = (Get-FileHash -Algorithm SHA256 $manifest).Hash.ToLowerInvariant()
           "sha256=$sha" >> $env:GITHUB_OUTPUT
           Write-Host "STEAMIOS_VALVE_MANIFEST_OK sha256=$sha"
@@ -49,7 +49,7 @@ jobs:
         run: |
           ./build/steamos-ios/build-steam-payload.ps1 `
             -OutputDir "$env:GITHUB_WORKSPACE\steam-payload-cache" `
-            -ManifestPath "$env:RUNNER_TEMP\steam_client_win32"
+            -ManifestPath "$env:RUNNER_TEMP\steam_client_win64"
 
       - name: Verify preinstalled Steam payload
         shell: pwsh
@@ -101,7 +101,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: SteamIOS-Windows-Steam
-          path: app/Madeira/SteamPrecache
+          path: build/steamos-steam-payload
 
       - name: Restore pinned source/toolchain cache
         uses: actions/cache@v4
