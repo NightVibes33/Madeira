@@ -1,2 +1,2 @@
-trigger=steamios-official-stikjit-protocol-20260930-v2
-purpose=single-source-custom-jit-script-plus-official-stikdebug-contract
+trigger=steamios-windowless-steam-x18-landscape-20260930-v1
+purpose=fix-steam-x18-trampoline-freeze-remove-explorer-cmd-and-unify-landscape-frame

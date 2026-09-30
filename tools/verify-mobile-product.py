@@ -11,6 +11,9 @@ APP = (ROOT / "app/Madeira/MadeiraApp.swift").read_text()
 GAMEPAD = (ROOT / "app/Madeira/GamepadInput.swift").read_text()
 TOUCH = (ROOT / "app/Madeira/TouchGamepad.swift").read_text()
 WINE = (ROOT / "app/Madeira/WineProcessBridge.m").read_text()
+SIGNAL = (ROOT / "build/ntdll-unix/signal_arm64_ios.c").read_text()
+LAUNCHER = (ROOT / "build/steamios-launcher/steamios-launcher.c").read_text()
+CLEAN_BUILD = (ROOT / "build/steamos-ios/build-clean-app.sh").read_text()
 STIK = (ROOT / "app/Madeira/StikJITHelper.swift").read_text()
 JIT = (ROOT / "app/Madeira/JITAllocator.c").read_text()
 LOGSTORE = (ROOT / "app/Madeira/LogStore.swift").read_text()
@@ -33,7 +36,22 @@ require("startSteamAutomatically()", CONTENT, "automatic Steam startup")
 require("if case .failed(let message) = productState", CONTENT, "failure-only startup overlay")
 forbid('return "Starting Steam"', CONTENT, "visible Starting Steam interstitial")
 forbid('return "Launching Steam"', CONTENT, "visible Launching Steam interstitial")
-require('"\\(winDir)\\\\steam.exe" -bigpicture -no-cef-sandbox', CONTENT, "Steam Big Picture launch")
+require('setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)', CONTENT,
+        "windowless Steam bootstrap")
+require("CreateProcessW", LAUNCHER, "native Windows launcher process creation")
+require("services.exe", LAUNCHER, "hidden Wine services prerequisite")
+require("-bigpicture", LAUNCHER, "Steam Big Picture launch")
+require(".steamios-steam-launched", LAUNCHER, "Steam launch marker")
+require("bash build/steamios-launcher/build.sh", CLEAN_BUILD, "launcher clean-build step")
+forbid("steam-launch.bat", CONTENT, "cmd/batch Steam wrapper")
+require("winios_set_product_visible(0)", CONTENT, "hidden Wine compositor during startup")
+require("winios_set_product_visible(steamSettingsPresented ? 0 : 1)", CONTENT,
+        "Steam compositor reveal gate")
+require("let presentation = convert(gameRect(), to: w)", CONTENT,
+        "shared Metal/compositor safe-area rectangle")
+require("void winios_set_product_visible(int visible);", WINIOS_H,
+        "compositor visibility API")
+require("[x18-xzr-recover] ml1137", SIGNAL, "malformed x18/XZR trampoline recovery")
 for legacy in (
     "Install Madeira via SideStore or Xcode",
     "Reinstall Madeira with the same IPA",

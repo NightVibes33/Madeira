@@ -123,11 +123,21 @@ jobs:
           ! grep -F 'setenv("MADEIRA_SURF_SEQ"' app/Madeira/ContentView.swift
           ! grep -F 'setenv("MADEIRA_IRCAP_RVA"' app/Madeira/ContentView.swift
 
-      - name: Verify Steam batch interpolation
+      - name: Verify windowless Steam bootstrap
         shell: bash
         run: |
-          grep -F 'cmd /c C:\\\(batch)' app/Madeira/ContentView.swift
-          ! grep -F 'cmd /c C:\\\\(batch)' app/Madeira/ContentView.swift
+          test -s build/steamios-launcher/steamios-launcher.c
+          test -s build/steamios-launcher/build.sh
+          grep -F 'bash build/steamios-launcher/build.sh' build/steamos-ios/build-clean-app.sh
+          grep -F 'setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)' app/Madeira/ContentView.swift
+          grep -F 'CreateProcessW' build/steamios-launcher/steamios-launcher.c
+          grep -F 'services.exe' build/steamios-launcher/steamios-launcher.c
+          grep -F -- '-bigpicture' build/steamios-launcher/steamios-launcher.c
+          grep -F '.steamios-steam-launched' build/steamios-launcher/steamios-launcher.c
+          ! grep -F 'steam-launch.bat' app/Madeira/ContentView.swift
+          grep -F 'winios_set_product_visible(0)' app/Madeira/ContentView.swift
+          grep -F 'winios_set_product_visible(steamSettingsPresented ? 0 : 1)' app/Madeira/ContentView.swift
+          grep -F '[x18-xzr-recover] ml1137' build/ntdll-unix/signal_arm64_ios.c
 
       - name: Verify preinstalled Steam shipping path
         shell: bash
@@ -143,8 +153,9 @@ jobs:
           grep -F 'g_wineserver_should_stop = 0;' app/Madeira/WineServerBridge.m
           grep -F 'winios_window_identity' build/win32u-unix/driver_ios.c
           grep -F 'winios_is_steam_window(hwnd)' app/Madeira/Winios/Winios.m
-          grep -F '"\(winDir)\\steam.exe" -bigpicture -no-cef-sandbox' app/Madeira/ContentView.swift
-          ! grep -F 'start "" "\(winDir)\\steam.exe"' app/Madeira/ContentView.swift
+          grep -F 'setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)' app/Madeira/ContentView.swift
+          grep -F -- '-bigpicture' build/steamios-launcher/steamios-launcher.c
+          ! grep -F 'steam-launch.bat' app/Madeira/ContentView.swift
           grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
           ! grep -F 'SteamSetup.exe /S' app/Madeira/ContentView.swift
           ! grep -F 'Installing Steam' app/Madeira/ContentView.swift
@@ -162,6 +173,8 @@ jobs:
           grep -F 'let height = isPad ? 900 : 720' app/Madeira/ContentView.swift
           grep -F 'window.safeAreaInsets' app/Madeira/ContentView.swift
           grep -F 'SteamOSDisplayProfile.activeGuestSize()' app/Madeira/ContentView.swift
+          grep -F 'let presentation = convert(gameRect(), to: w)' app/Madeira/ContentView.swift
+          grep -F 'void winios_set_product_visible(int visible);' app/Madeira/Winios/Winios.h
           test -s docs/STEAMOS_IOS_DISPLAY.md
 
       - name: Verify mandatory JIT + local Apple GPU
