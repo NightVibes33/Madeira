@@ -8,6 +8,8 @@ final class LogStore: ObservableObject {
     @Published var entries: [LogEntry] = []
 
     private let logFileURL: URL
+    private let crashDirectoryURL: URL
+    private let sessionMarkerURL: URL
     private let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
@@ -60,6 +62,18 @@ final class LogStore: ObservableObject {
     private init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         logFileURL = docs.appendingPathComponent("madeira-log.txt")
+        crashDirectoryURL = docs.appendingPathComponent("SteamIOS Crash Logs", isDirectory: true)
+        sessionMarkerURL = crashDirectoryURL.appendingPathComponent(".active-session")
+
+        try? FileManager.default.createDirectory(
+            at: crashDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        Self.recoverPreviousSessionIfNeeded(
+            markerURL: sessionMarkerURL,
+            runtimeLogURL: logFileURL,
+            crashDirectoryURL: crashDirectoryURL
+        )
 
         // ml601: ROTATE, don't destroy.
         //
@@ -253,6 +267,121 @@ final class LogStore: ObservableObject {
             for (i, e) in entries.enumerated() { sigToIndex[e.signature] = i }
         }
         stateLock.unlock()
+    }
+
+    /// Arm a foreground session marker. If the process dies before the marker
+    /// is cleared, the next launch turns the previous runtime log into a crash
+    /// report that is directly visible in the Files app.
+    func beginCrashSession() {
+        try? FileManager.default.createDirectory(
+            at: crashDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let marker = """
+        SteamIOS foreground session active
+        started: \(ISO8601DateFormatter().string(from: Date()))
+        version: \(version) (\(build))
+        bundle: \(Bundle.main.bundleIdentifier ?? "unknown")
+        os: \(ProcessInfo.processInfo.operatingSystemVersionString)
+        """
+        try? marker.write(to: sessionMarkerURL, atomically: true, encoding: .utf8)
+    }
+
+    /// Called when iOS backgrounds/terminates the app normally. A foreground
+    /// crash, jetsam, abort, or hard runtime termination leaves the marker in
+    /// place so the next launch can recover the previous log.
+    func markCrashSessionClean() {
+        try? FileManager.default.removeItem(at: sessionMarkerURL)
+    }
+
+    /// Persist a complete diagnostic snapshot into Documents/SteamIOS Crash Logs.
+    /// This folder is exposed by UIFileSharingEnabled +
+    /// LSSupportsOpeningDocumentsInPlace, so it appears in the iPhone Files app.
+    @discardableResult
+    func writeDiagnosticReport(reason: String, details: String? = nil) -> URL? {
+        try? FileManager.default.createDirectory(
+            at: crashDirectoryURL,
+            withIntermediateDirectories: true
+        )
+
+        let stamp = Self.fileTimestamp()
+        let suffix = String(UUID().uuidString.prefix(8))
+        let url = crashDirectoryURL.appendingPathComponent(
+            "SteamIOS-crash-\(stamp)-\(suffix).txt"
+        )
+
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        var report = """
+        SteamIOS diagnostic report
+        ==========================
+        timestamp: \(ISO8601DateFormatter().string(from: Date()))
+        reason: \(reason)
+        version: \(version) (\(build))
+        bundle: \(Bundle.main.bundleIdentifier ?? "unknown")
+        os: \(ProcessInfo.processInfo.operatingSystemVersionString)
+
+        """
+
+        if let details, !details.isEmpty {
+            report += "details:\n\(details)\n\n"
+        }
+
+        if let runtime = try? String(contentsOf: logFileURL, encoding: .utf8),
+           !runtime.isEmpty {
+            report += "runtime log:\n------------\n\(runtime)"
+        } else {
+            report += "runtime log: unavailable or empty\n"
+        }
+
+        do {
+            try report.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static func recoverPreviousSessionIfNeeded(
+        markerURL: URL,
+        runtimeLogURL: URL,
+        crashDirectoryURL: URL
+    ) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: markerURL.path) else { return }
+
+        try? fm.createDirectory(at: crashDirectoryURL, withIntermediateDirectories: true)
+
+        let stamp = fileTimestamp()
+        let suffix = String(UUID().uuidString.prefix(8))
+        let reportURL = crashDirectoryURL.appendingPathComponent(
+            "SteamIOS-crash-recovered-\(stamp)-\(suffix).txt"
+        )
+        let marker = (try? String(contentsOf: markerURL, encoding: .utf8)) ?? "(session marker unreadable)"
+        let runtime = (try? String(contentsOf: runtimeLogURL, encoding: .utf8)) ?? "(runtime log unavailable)"
+        let report = """
+        SteamIOS recovered unexpected foreground termination
+        ====================================================
+        recovered: \(ISO8601DateFormatter().string(from: Date()))
+
+        previous session marker:
+        \(marker)
+
+        previous runtime log:
+        ---------------------
+        \(runtime)
+        """
+        try? report.write(to: reportURL, atomically: true, encoding: .utf8)
+        try? fm.removeItem(at: markerURL)
+    }
+
+    private static func fileTimestamp() -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        return f.string(from: Date())
     }
 
     /// Manual clear (used by UI button)
