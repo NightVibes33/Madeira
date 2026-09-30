@@ -15,7 +15,7 @@ private func steamIOSUncaughtExceptionHandler(_ exception: NSException) {
 }
 
 @main
-struct MadeiraApp: App {
+struct SteamIOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
