@@ -1,0 +1,70 @@
+name: Publish SteamIOS build 78
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/publish-steamios-78.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download green build 78 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Debug-unsigned
+          path: dist
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 36677492816
+
+      - name: Verify artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa="$(find dist -type f -name 'SteamIOS.ipa' -print -quit)"
+          info="$(find dist -type f -name 'build-info.json' -print -quit)"
+          sums="$(find dist -type f -name 'SHA256SUMS' -print -quit)"
+          ipa_sha="$(find dist -type f -name 'SteamIOS.ipa.sha256' -print -quit)"
+          test -n "$ipa" && test -s "$ipa"
+          test -n "$info" && test -s "$info"
+          test -n "$sums" && test -s "$sums"
+          test -n "$ipa_sha" && test -s "$ipa_sha"
+          (
+            cd "$(dirname "$sums")"
+            sha256sum -c "$(basename "$sums")"
+          )
+          grep -F '"commit": "52c1bbbf2c2004d176d718ec513fb5ab92b877e0"' "$info"
+          mkdir -p release
+          cp "$ipa" release/SteamIOS.ipa
+          cp "$ipa_sha" release/SteamIOS.ipa.sha256
+          cp "$info" release/build-info.json
+          cp "$sums" release/SHA256SUMS
+          echo "STEAMIOS_78_RELEASE_GATE_OK"
+
+      - name: Publish direct IPA release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="steamios-build-78"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "52c1bbbf2c2004d176d718ec513fb5ab92b877e0" \
+              --title "SteamIOS build 78" \
+              --notes "Green unsigned Debug IPA from workflow run 36677492816. Includes retry-safe Steam startup, attached Steam lifetime, Steam-only landscape readiness, and full preinstalled Windows Steam."
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            release/SteamIOS.ipa \
+            release/SteamIOS.ipa.sha256 \
+            release/build-info.json \
+            release/SHA256SUMS \
+            --clobber
+          echo "STEAMIOS_78_RELEASE_PUBLISHED"
