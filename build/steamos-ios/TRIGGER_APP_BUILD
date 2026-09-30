@@ -1,2 +1,2 @@
-trigger=steamios-big-picture-crash-logs-20260930-v4
-purpose=final-build-silent-big-picture-files-crash-logs-contract
+trigger=steamios-debugger-rx-pool-20260930-v1
+purpose=fix-recovered-foreground-termination-nonexec-jit-pool
