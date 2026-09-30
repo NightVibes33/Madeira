@@ -35,7 +35,10 @@ $required = @(
     "steamclient.dll",
     "steamclient64.dll",
     "steamui.dll",
-    "bin\cef\cef.win7x64\steamwebhelper.exe",
+    "bin\cef\cef.win7x64\steamwebhelper.exe"
+)
+$installedManifestCandidates = @(
+    "package\steam_client_win64.installed",
     "package\steam_client_win32.installed"
 )
 
@@ -47,8 +50,12 @@ while ((Get-Date) -lt $deadline) {
     foreach ($relative in $required) {
         if (-not (Test-Path (Join-Path $steamRoot $relative))) { $allPresent = $false; break }
     }
-    $installedManifest = Join-Path $steamRoot "package\steam_client_win32.installed"
-    if ($allPresent -and (Test-Path $installedManifest)) {
+    $installedManifest = $null
+    foreach ($candidate in $installedManifestCandidates) {
+        $p = Join-Path $steamRoot $candidate
+        if (Test-Path $p) { $installedManifest = $p; break }
+    }
+    if ($allPresent -and $installedManifest) {
         $hash = (Get-FileHash -Algorithm SHA256 $installedManifest).Hash.ToLowerInvariant()
         if ($hash -eq $lastManifestHash) { $stableSamples++ } else { $lastManifestHash = $hash; $stableSamples = 0 }
         if ($stableSamples -ge 3) { break }
@@ -59,6 +66,12 @@ while ((Get-Date) -lt $deadline) {
 foreach ($relative in $required) {
     if (-not (Test-Path (Join-Path $steamRoot $relative))) { throw "Full Steam staging incomplete; missing $relative" }
 }
+$installedManifest = $null
+foreach ($candidate in $installedManifestCandidates) {
+    $p = Join-Path $steamRoot $candidate
+    if (Test-Path $p) { $installedManifest = $p; break }
+}
+if (-not $installedManifest) { throw "Full Steam staging incomplete; installed client manifest missing" }
 if ($stableSamples -lt 3) { throw "Steam client did not reach a stable fully-updated state before timeout" }
 
 Get-CimInstance Win32_Process | Where-Object {
@@ -91,7 +104,7 @@ $fileCount = (Get-ChildItem -Recurse -File $steamRoot).Count
 $totalBytes = (Get-ChildItem -Recurse -File $steamRoot | Measure-Object -Property Length -Sum).Sum
 
 @{
-    source_manifest = "https://client-update.akamai.steamstatic.com/steam_client_win32"
+    source_manifest = "https://client-update.akamai.steamstatic.com/steam_client_win64"
     source_manifest_sha256 = $manifestSha
     installer = $setupUrl
     payload_sha256 = $payloadSha
