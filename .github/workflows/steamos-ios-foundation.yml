@@ -174,8 +174,12 @@ jobs:
           grep -F 'MTLCreateSystemDefaultDevice()' app/Madeira/ContentView.swift
           grep -F 'STEAMOS_IOS_LOCAL_METAL' app/Madeira/ContentView.swift
           grep -F 'JIT pool setup FAILED — not starting Wine.' app/Madeira/ContentView.swift
-          grep -F 'func prepareExactPool' app/Madeira/StikJITHelper.swift
+          grep -F 'func allocateDebuggerRXFromReservation' app/Madeira/StikJITHelper.swift
+          grep -F 'func validateRXRange' app/Madeira/StikJITHelper.swift
+          grep -F 'pre-remap RX validation' app/Madeira/StikJITHelper.swift
+          grep -F 'post-alias RX validation' app/Madeira/StikJITHelper.swift
           grep -F 'startup-reservation' app/Madeira/StikJITHelper.swift
+          ! grep -F 'func prepareExactPool' app/Madeira/StikJITHelper.swift
           grep -F 'PRODUCT_BUNDLE_IDENTIFIER = com.nightvibes33.steamios;' app/Madeira.xcodeproj/project.pbxproj
           grep -F 'Assets.xcassets in Resources' app/Madeira.xcodeproj/project.pbxproj
           grep -F 'madeira-jit.js in Resources' app/Madeira.xcodeproj/project.pbxproj
