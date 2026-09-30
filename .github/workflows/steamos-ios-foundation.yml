@@ -133,8 +133,13 @@ jobs:
         shell: bash
         run: |
           grep -F 'SteamPayload.tar.gz' build/steamos-ios/build-clean-app.sh
+          grep -F 'assemble preinstalled Windows Steam client' .github/workflows/steamos-ios-app.yml
           grep -F '.steamios-bundled-client' app/Madeira/ContentView.swift
           grep -F 'madeira_extract_prefix_subtree_tgz' app/Madeira/WineProcessBridge.m
+          grep -F '.steamios-steam-launched' app/Madeira/ContentView.swift
+          grep -F 'steamProcessObserved' app/Madeira/ContentView.swift
+          grep -F 'steam.exe spawned; waiting for a post-Steam surface.' app/Madeira/ContentView.swift
+          grep -F 'Steam surface is live; switching to landscape.' app/Madeira/ContentView.swift
           grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
           ! grep -F 'SteamSetup.exe /S' app/Madeira/ContentView.swift
           ! grep -F 'Installing Steam' app/Madeira/ContentView.swift
