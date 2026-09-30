@@ -1091,7 +1091,6 @@ struct ContentView: View {
 
     private enum ProductState: Equatable {
         case startingJIT
-        case installingSteam
         case launchingSteam
         case running
         case failed(String)
@@ -1123,9 +1122,7 @@ struct ContentView: View {
                 // geometry transform after iOS restores the scene.
                 TouchControlsHost.attach()
                 MetalBackedView.refreshPresentationGeometry()
-                if productState == .installingSteam ||
-                   productState == .launchingSteam ||
-                   productState == .running {
+                if productState == .running {
                     SteamIOSOrientation.requestLandscape(log: logStore)
                 }
                 if productState == .running && !steamSettingsPresented {
@@ -1150,19 +1147,22 @@ struct ContentView: View {
                 }
             }
             .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
-                if productState == .installingSteam && steamIsInstalled() {
-                    logStore.log("Steam installer completion marker detected.", level: .success)
-                    productState = .launchingSteam
-                }
-
                 guard productState == .launchingSteam else { return }
                 let dxmtReady = Int(madeira_get_present_count()) > presentBaseline
                 let steamSurfaceReady = winios_get_surface_present_count() > compositorBaseline
                 if dxmtReady || steamSurfaceReady {
+                    // Steam is now genuinely alive in the iOS compositor. Only
+                    // now rotate the device; JIT/prefix preparation stays portrait.
                     productState = .running
-                    MetalHostView.shared.isHidden = steamSettingsPresented
-                    UIView.animate(withDuration: 0.20) {
-                        MetalHostView.shared.alpha = 1
+                    MetalHostView.shared.isHidden = true
+                    SteamIOSOrientation.requestLandscape(log: logStore)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                        MetalBackedView.refreshPresentationGeometry()
+                        TouchControlsHost.attach()
+                        MetalHostView.shared.isHidden = self.steamSettingsPresented
+                        UIView.animate(withDuration: 0.20) {
+                            MetalHostView.shared.alpha = 1
+                        }
                     }
                 }
             }
@@ -1208,7 +1208,6 @@ struct ContentView: View {
     private var productStatusTitle: String {
         switch productState {
         case .startingJIT: return "Starting Steam"
-        case .installingSteam: return "Installing Steam"
         case .launchingSteam: return "Launching Steam"
         case .running: return ""
         case .failed: return "Steam could not start"
@@ -1219,8 +1218,6 @@ struct ContentView: View {
         switch productState {
         case .startingJIT:
             return "Preparing local x86/x64 JIT execution. StikDebug may open once."
-        case .installingSteam:
-            return "Installing the precached Windows Steam client locally."
         case .launchingSteam:
             return "Starting Steam locally through Wine, FEX and Metal."
         case .running:
@@ -1267,35 +1264,44 @@ struct ContentView: View {
             return
         }
 
-        // Product UX: JIT handoff/setup can be portrait, but the Windows desktop
-        // and Steam client are landscape-first. Rotate as soon as executable JIT
-        // has been proven and we commit to starting the local runtime.
-        SteamIOSOrientation.requestLandscape(log: logStore)
-
         let steamSize = preferredSteamDesktopSize()
         let deskW = steamSize.width
         let deskH = steamSize.height
         logStore.log("Steam auto-start display target: \(deskW)x\(deskH)")
-
-        if !steamIsInstalled() {
-            productState = .installingSteam
-            Task { @MainActor in
-                await bootstrapSteamFirstRun(deskW: deskW, deskH: deskH)
-            }
-            return
-        }
-
-        guard prepareSteamLaunch() else {
-            productState = .failed("The installed Steam runtime could not be prepared.")
-            return
-        }
-        configureSteamProductRuntime(batch: "steam-launch.bat", deskW: deskW, deskH: deskH)
         productState = .launchingSteam
-        runWineFullSequence { exitCode in
+
+        // The complete Valve Win64 client ships inside prefix-template.tar.gz.
+        // Prefix extraction/legacy-prefix repair is filesystem work only; run it
+        // off the main thread so a large first-run Steam payload cannot trip the
+        // iOS watchdog. No SteamSetup.exe is executed on-device.
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let prefixPath = docs.appendingPathComponent("wine", isDirectory: true).path
+        DispatchQueue.global(qos: .userInitiated).async {
+            prefixPath.withCString { madeira_seed_prefix_if_needed($0) }
+
+            let steamDir = prefixPath + "/drive_c/Program Files (x86)/Steam"
+            let ready = FileManager.default.fileExists(atPath: steamDir + "/steam.exe") &&
+                        FileManager.default.fileExists(atPath: steamDir + "/steamclient64.dll") &&
+                        FileManager.default.fileExists(atPath: steamDir + "/.steamios-bundled-client")
+
             DispatchQueue.main.async {
-                if self.productState != .running {
+                guard ready else {
                     self.productState = .failed(
-                        "Wine/Steam exited before creating a display surface (exit \(exitCode)).")
+                        "The bundled Steam client is missing or incomplete. Reinstall this SteamIOS build.")
+                    return
+                }
+                guard self.prepareSteamLaunch() else {
+                    self.productState = .failed("The bundled Steam runtime could not be prepared.")
+                    return
+                }
+                self.configureSteamProductRuntime(batch: "steam-launch.bat", deskW: deskW, deskH: deskH)
+                self.runWineFullSequence { exitCode in
+                    DispatchQueue.main.async {
+                        if self.productState != .running {
+                            self.productState = .failed(
+                                "Wine/Steam exited before creating a display surface (exit \(exitCode)).")
+                        }
+                    }
                 }
             }
         }
@@ -2557,14 +2563,11 @@ struct ContentView: View {
         return candidates.first(where: { fm.fileExists(atPath: "\($0.1)/steam.exe") })
     }
 
-    private func steamInstallMarkerURL() -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent("wine/drive_c/.steamios-steam-installed")
-    }
-
     private func steamIsInstalled() -> Bool {
-        guard steamInstallLocation() != nil else { return false }
-        return FileManager.default.fileExists(atPath: steamInstallMarkerURL().path)
+        guard let location = steamInstallLocation() else { return false }
+        let fm = FileManager.default
+        return fm.fileExists(atPath: location.unix + "/steamclient64.dll") &&
+               fm.fileExists(atPath: location.unix + "/.steamios-bundled-client")
     }
 
     /// Configure the normal Steam product session.
@@ -2593,115 +2596,6 @@ struct ContentView: View {
         // This means V8/CEF jitless, NOT FEX jitless. FEX x86/x64 translation
         // still requires the executable JIT gate and the large StikJIT pool.
         setenv("MADEIRA_JITLESS", "1", 1)
-    }
-
-    /// First-run Windows Steam bootstrap.
-    ///
-    /// Valve's current Windows installer is a 32-bit PE. The frozen Madeira
-    /// baseline now ships the WoW64/FEX chain required to execute it, so the old
-    /// "copy a CrossOver Steam folder" requirement is obsolete.
-    @MainActor
-    private func bootstrapSteamFirstRun(deskW: Int, deskH: Int) async {
-        guard SteamOSRuntimeGate.validate(log: logStore) else {
-            productState = .failed("Local JIT/Metal runtime validation failed before Steam installation.")
-            return
-        }
-
-        let fm = FileManager.default
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let prefixURL = docs.appendingPathComponent("wine", isDirectory: true)
-        let driveC = prefixURL.appendingPathComponent("drive_c", isDirectory: true)
-        let setupURL = driveC.appendingPathComponent("SteamSetup.exe")
-        let bootstrapBAT = driveC.appendingPathComponent("steam-bootstrap.bat")
-
-        guard let officialURL = URL(string: "https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe") else {
-            logStore.log("Internal error: invalid Steam installer URL", level: .error)
-            productState = .failed("The Steam installer URL is invalid.")
-            return
-        }
-
-        do {
-            try fm.createDirectory(at: prefixURL, withIntermediateDirectories: true)
-            prefixURL.path.withCString { madeira_seed_prefix_if_needed($0) }
-            guard fm.fileExists(atPath: driveC.path) else {
-                throw NSError(domain: "SteamBootstrap", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey:
-                                "Wine prefix bootstrap did not create drive_c"])
-            }
-
-            func validSteamSetup(_ data: Data) -> Bool {
-                data.count >= 1_000_000 &&
-                data[data.startIndex] == 0x4d &&
-                data[data.index(after: data.startIndex)] == 0x5a
-            }
-
-            if let existing = try? Data(contentsOf: setupURL), validSteamSetup(existing) {
-                // Preferred path: clean builds inject SteamSetup.exe directly into
-                // prefix-template.tar.gz, so a brand-new prefix already has C:\SteamSetup.exe.
-                logStore.log("Steam first run: prefix-template precache ready (\(existing.count) bytes)", level: .success)
-            } else if let cachedURL = Bundle.main.url(forResource: "SteamSetup",
-                                                      withExtension: "exe",
-                                                      subdirectory: "SteamPrecache"),
-                      let cachedData = try? Data(contentsOf: cachedURL),
-                      validSteamSetup(cachedData) {
-                // Migration path for an already-seeded prefix created by an older IPA.
-                try cachedData.write(to: setupURL, options: .atomic)
-                logStore.log("Steam first run: repaired prefix from bundled precache (\(cachedData.count) bytes)", level: .success)
-            } else {
-                // Last resort only. Normal fresh installs should never need network here.
-                logStore.log("Steam precache unavailable/invalid; downloading Valve SteamSetup.exe...")
-                let (downloaded, response) = try await URLSession.shared.data(from: officialURL)
-
-                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    throw NSError(domain: "SteamBootstrap", code: http.statusCode,
-                                  userInfo: [NSLocalizedDescriptionKey: "Steam download HTTP \(http.statusCode)"])
-                }
-
-                guard validSteamSetup(downloaded) else {
-                    throw NSError(domain: "SteamBootstrap", code: 2,
-                                  userInfo: [NSLocalizedDescriptionKey: "Downloaded SteamSetup.exe is not a valid PE payload"])
-                }
-                try downloaded.write(to: setupURL, options: .atomic)
-                logStore.log("SteamSetup.exe CDN fallback staged (\(downloaded.count) bytes)", level: .success)
-            }
-
-            let bat = """
-            @echo off\r
-            if not exist "C:\\SteamSetup.exe" exit /b 10\r
-            C:\\SteamSetup.exe /S\r
-            if errorlevel 1 exit /b 11\r
-            if not exist "C:\\Program Files (x86)\\Steam\\steam.exe" exit /b 12\r
-            >"C:\\.steamios-steam-installed" echo SteamIOS installer completed\r
-            start "" "C:\\windows\\system32\\services.exe"\r
-            cd /d "C:\\Program Files (x86)\\Steam"\r
-            rem CEF stays software-rasterized during bring-up; games still use local DXMT/D3D12 -> Metal.\r
-            "C:\\Program Files (x86)\\Steam\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
-            """
-            try bat.write(to: bootstrapBAT, atomically: true, encoding: .utf8)
-
-            // Install + launch in the same Madeira/Wine session. SteamSetup.exe
-            // enters WoW64; the installed x64 helpers continue through FEX.
-            configureSteamProductRuntime(batch: "steam-bootstrap.bat",
-                                         deskW: deskW, deskH: deskH)
-
-            logStore.log("Launching official Steam installer through Wine WoW64 + FEX...", level: .success)
-            runWineFullSequence { exitCode in
-                DispatchQueue.main.async {
-                    if self.steamIsInstalled() {
-                        if self.productState == .installingSteam {
-                            self.productState = .launchingSteam
-                        }
-                        self.logStore.log("Steam installer completed; Steam runtime is present.", level: .success)
-                    } else if self.productState != .running {
-                        self.productState = .failed(
-                            "Steam installer/Wine exited before completing (exit \(exitCode)). The prefix will be repaired from the bundled precache on Retry.")
-                    }
-                }
-            }
-        } catch {
-            logStore.log("Steam first-run bootstrap failed: \(error.localizedDescription)", level: .error)
-            productState = .failed("Steam installation failed: \(error.localizedDescription)")
-        }
     }
 
     /// Locate an installed Steam client and regenerate the stable launch batch.
