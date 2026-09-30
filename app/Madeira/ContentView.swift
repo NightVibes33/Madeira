@@ -10,6 +10,12 @@ extension Notification.Name {
 
 @MainActor
 private enum SteamIOSOrientation {
+    static var isLandscape: Bool {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        return scene?.interfaceOrientation.isLandscape == true
+    }
+
     static func requestLandscape(log: LogStore? = nil) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
@@ -1086,6 +1092,8 @@ struct ContentView: View {
     @State private var didStartSteamProduct = false
     @State private var presentBaseline = 0
     @State private var compositorBaseline: UInt64 = 0
+    @State private var steamProcessObserved = false
+    @State private var steamLandscapeRequested = false
     @State private var productState: ProductState = .startingJIT
     @Namespace private var pointerNS
 
@@ -1148,22 +1156,41 @@ struct ContentView: View {
             }
             .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
                 guard productState == .launchingSteam else { return }
-                let dxmtReady = Int(madeira_get_present_count()) > presentBaseline
-                let steamSurfaceReady = winios_get_surface_present_count() > compositorBaseline
-                if dxmtReady || steamSurfaceReady {
-                    // Steam is now genuinely alive in the iOS compositor. Only
-                    // now rotate the device; JIT/prefix preparation stays portrait.
-                    productState = .running
-                    MetalHostView.shared.isHidden = true
-                    SteamIOSOrientation.requestLandscape(log: logStore)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-                        MetalBackedView.refreshPresentationGeometry()
-                        TouchControlsHost.attach()
-                        MetalHostView.shared.isHidden = self.steamSettingsPresented
-                        UIView.animate(withDuration: 0.20) {
-                            MetalHostView.shared.alpha = 1
-                        }
+
+                // Explorer can create/present a desktop before Steam starts. Do
+                // not use that as the landscape trigger. The launch batch writes
+                // this marker only after Windows successfully spawns steam.exe.
+                if !steamProcessObserved {
+                    guard FileManager.default.fileExists(atPath: steamLaunchMarkerURL().path) else {
+                        return
                     }
+                    steamProcessObserved = true
+                    presentBaseline = Int(madeira_get_present_count())
+                    compositorBaseline = winios_get_surface_present_count()
+                    logStore.log("steam.exe spawned; waiting for a post-Steam surface.",
+                                 level: .success)
+                    return
+                }
+
+                let steamPresented = Int(madeira_get_present_count()) > presentBaseline ||
+                    winios_get_surface_present_count() > compositorBaseline
+                guard steamPresented else { return }
+
+                if !steamLandscapeRequested {
+                    steamLandscapeRequested = true
+                    MetalHostView.shared.isHidden = true
+                    logStore.log("Steam surface is live; switching to landscape.", level: .success)
+                    SteamIOSOrientation.requestLandscape(log: logStore)
+                    return
+                }
+
+                guard SteamIOSOrientation.isLandscape else { return }
+                productState = .running
+                MetalBackedView.refreshPresentationGeometry()
+                TouchControlsHost.attach()
+                MetalHostView.shared.isHidden = steamSettingsPresented
+                UIView.animate(withDuration: 0.20) {
+                    MetalHostView.shared.alpha = 1
                 }
             }
     }
@@ -1232,8 +1259,11 @@ struct ContentView: View {
         guard !didStartSteamProduct else { return }
         didStartSteamProduct = true
         productState = .startingJIT
+        steamProcessObserved = false
+        steamLandscapeRequested = false
         presentBaseline = Int(madeira_get_present_count())
         compositorBaseline = winios_get_surface_present_count()
+        try? FileManager.default.removeItem(at: steamLaunchMarkerURL())
         MetalHostView.shared.alpha = 0
         MetalHostView.shared.isHidden = false
 
@@ -2570,6 +2600,11 @@ struct ContentView: View {
                fm.fileExists(atPath: location.unix + "/.steamios-bundled-client")
     }
 
+    private func steamLaunchMarkerURL() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("wine/drive_c/.steamios-steam-launched")
+    }
+
     /// Configure the normal Steam product session.
     ///
     /// Research probes stay opt-in through dedicated diagnostics controls; the
@@ -2612,10 +2647,13 @@ struct ContentView: View {
         let bat = """
         @echo off\r
         rem Generated by SteamIOS — rewritten every launch.\r
+        del /f /q "C:\\.steamios-steam-launched" >nul 2>&1\r
         start "" "C:\\windows\\system32\\services.exe"\r
         cd /d "\(winDir)"\r
         rem CEF stays software-rasterized during bring-up; games still use local DXMT/D3D12 -> Metal.\r
-        "\(winDir)\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
+        start "" "\(winDir)\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
+        if errorlevel 1 exit /b 21\r
+        >"C:\\.steamios-steam-launched" echo Steam process spawned\r
         """
 
         let batPath = "\(prefix)/drive_c/steam-launch.bat"
