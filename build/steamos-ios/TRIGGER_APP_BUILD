@@ -1,2 +1,2 @@
-trigger=steamios-landscape-prefix-precache-clean-tail-20260929
-purpose=final-clean-ipa-after-removing-stale-build-tail
+trigger=steamios-full-steam-post-spawn-landscape-20260929
+purpose=ship-preinstalled-steam-and-rotate-only-after-steam-surface
