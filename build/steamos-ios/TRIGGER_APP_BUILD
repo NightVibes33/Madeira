@@ -1,2 +1,2 @@
-trigger=steamios-runtime-repair-prefix-precache-20260929
-purpose=inject-steam-setup-into-prefix-template-and-surface-wine-exit
+trigger=steamios-runtime-repair-prefix-precache-pbxfix-20260929
+purpose=inject-prefix-precache-runtime-repair-after-project-fix
