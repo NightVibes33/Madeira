@@ -600,7 +600,45 @@ static CALayer *g_desk_bg;               /* teal desktop-area backdrop */
 static CGFloat g_px_to_pt = 1.0 / 3.0;   /* desktop px → screen pt */
 static CGPoint g_desk_origin;            /* desktop (0,0) in view pt (letterbox offset) */
 static CGRect g_comp_frame;              /* presentation area (window coords), from Swift */
-static unsigned long long g_visible_surface_present_count; /* large Steam/CEF GDI presents */
+static unsigned long long g_visible_surface_present_count; /* verified Steam-window GDI presents */
+static NSMutableDictionary<NSNumber *, NSNumber *> *g_window_is_steam;
+
+static void winios_ensure_identity_map(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        g_window_is_steam = [NSMutableDictionary new];
+    });
+}
+
+void winios_window_identity(void *hwnd, const char *class_name, const char *title) {
+    if (!hwnd) return;
+    winios_ensure_identity_map();
+
+    NSString *cls = class_name ? [NSString stringWithUTF8String:class_name] : @"";
+    NSString *txt = title ? [NSString stringWithUTF8String:title] : @"";
+    BOOL isSteam =
+        [cls rangeOfString:@"steam" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+        [txt rangeOfString:@"steam" options:NSCaseInsensitiveSearch].location != NSNotFound;
+
+    NSNumber *key = @((uintptr_t)hwnd);
+    @synchronized (g_window_is_steam) {
+        g_window_is_steam[key] = @(isSteam);
+    }
+
+    if (isSteam) {
+        fprintf(stderr, "[winios] Steam window identity hwnd=%p class='%s' title='%s'\n",
+                hwnd, class_name ? class_name : "", title ? title : "");
+        fflush(stderr);
+    }
+}
+
+static BOOL winios_is_steam_window(HWND hwnd) {
+    winios_ensure_identity_map();
+    NSNumber *key = @((uintptr_t)hwnd);
+    @synchronized (g_window_is_steam) {
+        return [g_window_is_steam[key] boolValue];
+    }
+}
 
 unsigned long long winios_get_surface_present_count(void) {
     return __atomic_load_n(&g_visible_surface_present_count, __ATOMIC_RELAXED);
@@ -723,6 +761,10 @@ static void winios_remove_layer(HWND hwnd) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!g_layers) return;
         NSNumber *key = @((uintptr_t)hwnd);
+        winios_ensure_identity_map();
+        @synchronized (g_window_is_steam) {
+            [g_window_is_steam removeObjectForKey:key];
+        }
         CALayer *l = g_layers[key];
         if (l) {
             [l removeFromSuperlayer];
@@ -1010,11 +1052,19 @@ int winios_surface_present(HWND hwnd, int dx, int dy, int dw, int dh,
      * CoreGraphics builds from it. */
     NSData *data = [NSData dataWithBytesNoCopy:snap length:snap_len freeWhenDone:YES];
 
-    /* Product readiness: Steam/CEF is a GDI/compositor path, not necessarily a
-     * DXMT swapchain. Count only substantial surfaces so a tiny helper/tooltip
-     * cannot dismiss the native startup state before real Steam pixels exist. */
-    if (sw >= 400 && sh >= 300)
-        __atomic_add_fetch(&g_visible_surface_present_count, 1, __ATOMIC_RELAXED);
+    /* Product readiness must be Steam-specific. Explorer's desktop is also a
+     * large GDI surface and used to trigger landscape before Steam existed.
+     * Only count substantial surfaces belonging to a HWND whose Windows title
+     * or class has been identified as Steam. */
+    if (sw >= 400 && sh >= 300 && winios_is_steam_window(hwnd)) {
+        unsigned long long n =
+            __atomic_add_fetch(&g_visible_surface_present_count, 1, __ATOMIC_RELAXED);
+        if (n <= 4) {
+            fprintf(stderr, "[winios] verified Steam surface present #%llu hwnd=%p %dx%d\n",
+                    n, hwnd, sw, sh);
+            fflush(stderr);
+        }
+    }
 
     static int dumpSurf = -1;
     if (dumpSurf < 0) dumpSurf = getenv("MADEIRA_DUMP_SURFACES") != NULL;
