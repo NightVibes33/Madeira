@@ -1,2 +1,2 @@
-trigger=steamios-runtime-repair-prefix-precache-shellfix-20260929
-purpose=clean-ipa-after-prefix-precache-shell-fix
+trigger=steamios-runtime-repair-prefix-precache-atomic-20260929
+purpose=clean-ipa-after-atomic-precache-script-rebuild
