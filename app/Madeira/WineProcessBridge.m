@@ -287,6 +287,7 @@ extern void wine_log_set_file(const char *path);
 
 static pthread_t g_wine_thread;
 static volatile int g_wine_running = 0;
+static volatile int g_wine_last_exit_code = 0;
 static char *g_prefix_path = NULL;
 
 /***********************************************************************
@@ -1354,8 +1355,10 @@ static void *wine_process_thread(void *arg) {
 
         if (setjmp(wine_ios_exit_jmpbuf) == 0) {
             __wine_main(argc, argv);
+            g_wine_last_exit_code = 0;
             dprintf(STDERR_FILENO, "[WineProc] __wine_main returned normally\n");
         } else {
+            g_wine_last_exit_code = wine_ios_exit_code;
             dprintf(STDERR_FILENO, "[WineProc] Wine exited with code %d (caught by longjmp)\n", wine_ios_exit_code);
         }
 
@@ -1394,6 +1397,7 @@ int wine_process_start(const char *prefix_path) {
 
     LOG("Starting Wine process with prefix: %{public}s", prefix_path);
 
+    g_wine_last_exit_code = 0;
     g_wine_running = 1;
 
     // Create socketpair to bypass broken iOS UDS accept()
@@ -1439,6 +1443,10 @@ int wine_process_start(const char *prefix_path) {
 
 int wine_process_is_running(void) {
     return g_wine_running;
+}
+
+int wine_process_last_exit_code(void) {
+    return g_wine_last_exit_code;
 }
 
 int madeira_write_continue_flag(void) {
