@@ -56,6 +56,11 @@ require('setenv("WINE_IOS_JIT_RX"', CONTENT, "real Wine JIT RX pool")
 require('setenv("WINE_IOS_JIT_RW"', CONTENT, "real Wine JIT RW pool")
 require('setenv("WINE_IOS_JIT_SIZE"', CONTENT, "real Wine JIT pool size")
 require("JIT attach timed out after", STIK, "bounded JIT attach timeout")
+require("func allocateDebuggerRXFromReservation", STIK, "debugger-owned JIT pool allocation")
+require("func validateRXRange", STIK, "JIT RX protection validation")
+require("pre-remap RX validation", STIK, "pre-remap JIT RX validation")
+require("post-alias RX validation", STIK, "post-alias JIT RX validation")
+forbid("func prepareExactPool", STIK, "obsolete in-place JIT placeholder blessing")
 require('productState = .failed("Local JIT/Metal runtime validation failed.', CONTENT,
         "visible runtime-gate failure")
 require('let jitFailure = "Executable JIT pool setup failed after JIT attached.', CONTENT,
