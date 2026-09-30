@@ -1,2 +1,2 @@
-trigger=steamios-runtime-repair-prefix-precache-pbxfix-20260929
-purpose=inject-prefix-precache-runtime-repair-after-project-fix
+trigger=steamios-runtime-repair-prefix-precache-shellfix-20260929
+purpose=clean-ipa-after-prefix-precache-shell-fix
