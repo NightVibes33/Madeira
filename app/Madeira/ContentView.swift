@@ -8,6 +8,36 @@ extension Notification.Name {
     static let steamOSSettingsRequested = Notification.Name("SteamIOS.SettingsRequested")
 }
 
+@MainActor
+private enum SteamIOSOrientation {
+    static func requestLandscape(log: LogStore? = nil) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
+                ?? scenes.first else {
+            log?.log("[DISPLAY] No UIWindowScene available for landscape request.", level: .error)
+            return
+        }
+
+        let preferences = UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: .landscape)
+        scene.requestGeometryUpdate(preferences) { error in
+            log?.log("[DISPLAY] Landscape request failed: \(error.localizedDescription)", level: .error)
+        }
+
+        // Geometry updates are asynchronous. Refresh the Metal host on the next
+        // main-loop turns so the CAMetalLayer adopts the post-rotation bounds.
+        DispatchQueue.main.async {
+            MetalBackedView.refreshPresentationGeometry()
+            TouchControlsHost.attach()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            MetalBackedView.refreshPresentationGeometry()
+            TouchControlsHost.attach()
+        }
+
+        log?.log("[DISPLAY] Requested landscape for Steam runtime.", level: .success)
+    }
+}
+
 /// Shared logical-resolution and presentation policy for Windows Steam/games.
 private enum SteamOSDisplayProfile {
     static func preferredDesktopSize() -> (width: Int, height: Int) {
@@ -1093,6 +1123,11 @@ struct ContentView: View {
                 // geometry transform after iOS restores the scene.
                 TouchControlsHost.attach()
                 MetalBackedView.refreshPresentationGeometry()
+                if productState == .installingSteam ||
+                   productState == .launchingSteam ||
+                   productState == .running {
+                    SteamIOSOrientation.requestLandscape(log: logStore)
+                }
                 if productState == .running && !steamSettingsPresented {
                     MetalHostView.shared.alpha = 1
                     MetalHostView.shared.isHidden = false
@@ -1185,7 +1220,7 @@ struct ContentView: View {
         case .startingJIT:
             return "Preparing local x86/x64 JIT execution. StikDebug may open once."
         case .installingSteam:
-            return "Downloading and installing Valve's Windows Steam client."
+            return "Installing the precached Windows Steam client locally."
         case .launchingSteam:
             return "Starting Steam locally through Wine, FEX and Metal."
         case .running:
@@ -1231,6 +1266,11 @@ struct ContentView: View {
             productState = .failed("Local JIT/Metal runtime validation failed. Re-enable JIT and retry.")
             return
         }
+
+        // Product UX: JIT handoff/setup can be portrait, but the Windows desktop
+        // and Steam client are landscape-first. Rotate as soon as executable JIT
+        // has been proven and we commit to starting the local runtime.
+        SteamIOSOrientation.requestLandscape(log: logStore)
 
         let steamSize = preferredSteamDesktopSize()
         let deskW = steamSize.width
