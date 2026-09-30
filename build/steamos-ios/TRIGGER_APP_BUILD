@@ -1,2 +1,2 @@
-trigger=steamios-sidestore-precache-20260929
-purpose=precache-official-steam-installer-and-verify-sidestore-identity
+trigger=steamios-runtime-repair-prefix-precache-20260929
+purpose=inject-steam-setup-into-prefix-template-and-surface-wine-exit
