@@ -54,30 +54,26 @@ jobs:
       - name: Verify preinstalled Steam payload
         shell: pwsh
         run: |
-          $payload = "steam-payload-cache\SteamPayload.tar.gz"
+          $root = "steam-payload-cache\Steam"
           $meta = "steam-payload-cache\SteamPayload.json"
-          if (-not (Test-Path $payload)) { throw "SteamPayload.tar.gz missing" }
           if (-not (Test-Path $meta)) { throw "SteamPayload.json missing" }
-          $entries = (& tar.exe -tzf $payload) -replace '\\','/'
           foreach ($required in @(
-            "Steam/steam.exe",
-            "Steam/steamclient.dll",
-            "Steam/steamclient64.dll",
-            "Steam/steamui.dll",
-            "Steam/bin/cef/cef.win7x64/steamwebhelper.exe",
-            "Steam/package/steam_client_win32.installed"
+            "steam.exe",
+            "steamclient.dll",
+            "steamclient64.dll",
+            "steamui.dll",
+            "bin\cef\cef.win7x64\steamwebhelper.exe",
+            "package\steam_client_win32.installed"
           )) {
-            if ($entries -notcontains $required) { throw "Steam payload missing $required" }
+            if (-not (Test-Path (Join-Path $root $required))) { throw "Steam payload missing $required" }
           }
-          Write-Host "STEAMIOS_FULL_STEAM_ARCHIVE_GATE_OK"
+          Write-Host "STEAMIOS_FULL_STEAM_DIRECTORY_GATE_OK"
 
       - name: Upload preinstalled Steam payload
         uses: actions/upload-artifact@v4
         with:
           name: SteamIOS-Windows-Steam
-          path: |
-            steam-payload-cache/SteamPayload.tar.gz
-            steam-payload-cache/SteamPayload.json
+          path: steam-payload-cache
           if-no-files-found: error
           compression-level: 0
 
