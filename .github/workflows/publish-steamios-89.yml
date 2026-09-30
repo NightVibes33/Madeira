@@ -1,0 +1,70 @@
+name: Publish SteamIOS build 89
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/publish-steamios-89.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download green build 89 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Debug-unsigned
+          path: dist
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 36759663482
+
+      - name: Verify artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa="$(find dist -type f -name 'SteamIOS.ipa' -print -quit)"
+          info="$(find dist -type f -name 'build-info.json' -print -quit)"
+          sums="$(find dist -type f -name 'SHA256SUMS' -print -quit)"
+          ipa_sha="$(find dist -type f -name 'SteamIOS.ipa.sha256' -print -quit)"
+          test -n "$ipa" && test -s "$ipa"
+          test -n "$info" && test -s "$info"
+          test -n "$sums" && test -s "$sums"
+          test -n "$ipa_sha" && test -s "$ipa_sha"
+          (
+            cd "$(dirname "$sums")"
+            sha256sum -c "$(basename "$sums")"
+          )
+          grep -F '"commit": "2749ed4dc66544b248d492e47f3c9fb74be3ed17"' "$info"
+          mkdir -p release
+          cp "$ipa" release/SteamIOS.ipa
+          cp "$ipa_sha" release/SteamIOS.ipa.sha256
+          cp "$info" release/build-info.json
+          cp "$sums" release/SHA256SUMS
+          sha256sum release/SteamIOS.ipa
+          echo "STEAMIOS_89_RELEASE_GATE_OK"
+
+      - name: Publish direct IPA release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="steamios-build-89"
+          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+            --target "2749ed4dc66544b248d492e47f3c9fb74be3ed17" \
+            --title "SteamIOS build 89" \
+            --notes "Green unsigned Debug IPA from workflow run 36759663482. Includes direct windowless Steam startup, landscape compositor geometry fixes, StikDebug JIT fixes, and the source-level x18 patcher fix."
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            release/SteamIOS.ipa \
+            release/SteamIOS.ipa.sha256 \
+            release/build-info.json \
+            release/SHA256SUMS \
+            --clobber
+          echo "STEAMIOS_89_RELEASE_PUBLISHED"
