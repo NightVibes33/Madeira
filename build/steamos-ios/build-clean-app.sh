@@ -157,11 +157,19 @@ required = {
     "Steam/bin/cef/cef.win7x64/steamwebhelper.exe",
 }
 with tarfile.open(payload, "r:gz") as tf:
-    names = {n.replace("\\", "/").lstrip("./") for n in tf.getnames()}
-missing = sorted(required - names)
+    # Steam is a Windows payload, so validate archive members with Windows-style
+    # case-insensitive path semantics. PowerShell's staging gate already does
+    # this; keep the macOS gate consistent with the runtime.
+    names = {n.replace("\\", "/").lstrip("./").casefold() for n in tf.getnames()}
+required_folded = {n.casefold() for n in required}
+missing = sorted(required_folded - names)
 if missing:
     raise SystemExit("error: preinstalled Steam payload incomplete: " + ", ".join(missing))
-if not ({"Steam/package/steam_client_win64.installed", "Steam/package/steam_client_win32.installed"} & names):
+installed = {
+    "Steam/package/steam_client_win64.installed".casefold(),
+    "Steam/package/steam_client_win32.installed".casefold(),
+}
+if not (installed & names):
     raise SystemExit("error: preinstalled Steam payload has no installed client manifest")
 j = json.loads(meta.read_text(encoding="utf-8-sig"))
 if not j.get("payload_sha256") or not j.get("source_manifest_sha256"):
