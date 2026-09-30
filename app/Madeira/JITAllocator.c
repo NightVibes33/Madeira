@@ -399,26 +399,24 @@ void jit_install_trap_handler(void) {
 // reads x16/x0/x1, performs the operation, and resumes.
 // When no debugger is attached, the SIGTRAP handler skips the BRK.
 
-__attribute__((noinline, optnone))
+// Match StikJIT's documented universal ABI exactly. Naked stubs preserve
+// x0/x1 as the incoming address/length and leave the script's x0 response
+// untouched as the C return value.
+__attribute__((noinline, optnone, naked))
 void *jit26_prepare_region(void *addr, size_t len) {
-    register void *x0 __asm__("x0") = addr;
-    register size_t x1 __asm__("x1") = len;
-    __asm__ volatile(
+    __asm__(
         "mov x16, #1\n"
         "brk #0xf00d\n"
-        : "+r"(x0)
-        : "r"(x1)
-        : "x16", "memory"
+        "ret\n"
     );
-    return x0;
 }
 
-__attribute__((noinline, optnone))
+__attribute__((noinline, optnone, naked))
 void jit26_detach(void) {
-    __asm__ volatile(
+    __asm__(
         "mov x16, #0\n"
         "brk #0xf00d\n"
-        ::: "x16", "memory"
+        "ret\n"
     );
 }
 
@@ -702,8 +700,10 @@ int64_t jit_test_execute_strategy2(void) {
         jit_log("add(100, 200) = %lld (expected 300)", add_result);
     }
 
-    // Cleanup
+    // Cleanup both aliases. This smoke test proves the protocol only; the
+    // production pool is allocated separately and remains process-lifetime.
     vm_deallocate(task, rw_addr, size);
+    vm_deallocate(task, (vm_address_t)rx_ptr, size);
 
     if (result == 42) {
         jit_log("=== JIT tests passed (strategy 2) ===");

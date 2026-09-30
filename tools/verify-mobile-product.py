@@ -12,6 +12,7 @@ GAMEPAD = (ROOT / "app/Madeira/GamepadInput.swift").read_text()
 TOUCH = (ROOT / "app/Madeira/TouchGamepad.swift").read_text()
 WINE = (ROOT / "app/Madeira/WineProcessBridge.m").read_text()
 STIK = (ROOT / "app/Madeira/StikJITHelper.swift").read_text()
+JIT = (ROOT / "app/Madeira/JITAllocator.c").read_text()
 LOGSTORE = (ROOT / "app/Madeira/LogStore.swift").read_text()
 WINIOS_H = (ROOT / "app/Madeira/Winios/Winios.h").read_text()
 WINIOS_M = (ROOT / "app/Madeira/Winios/Winios.m").read_text()
@@ -44,7 +45,7 @@ for legacy in (
 
 # JIT and local Apple GPU are mandatory.
 require("jit_check_debugged()", CONTENT, "JIT capability gate")
-require("let probe = jit_test_execute()", CONTENT, "executable JIT probe")
+require("let probe = jit_test_execute_strategy2()", CONTENT, "debugger-owned executable JIT probe")
 require("guard probe == 42", CONTENT, "JIT sentinel")
 require("MTLCreateSystemDefaultDevice()", CONTENT, "local Metal device")
 require('setenv("STEAMOS_IOS_LOCAL_METAL", "1", 1)', CONTENT, "local Metal invariant")
@@ -60,6 +61,16 @@ require("func allocateDebuggerRXFromReservation", STIK, "debugger-owned JIT pool
 require("func validateRXRange", STIK, "JIT RX protection validation")
 require("pre-remap RX validation", STIK, "pre-remap JIT RX validation")
 require("post-alias RX validation", STIK, "post-alias JIT RX validation")
+require('components.scheme = "stikdebug"', STIK, "official StikDebug URL scheme")
+require('URLQueryItem(name: "bundle-id"', STIK, "StikDebug bundle targeting")
+require('URLQueryItem(name: "pid"', STIK, "StikDebug PID targeting")
+require('URLQueryItem(name: "script-data"', STIK, "developer-defined StikDebug script")
+require('checkAppEntitlement("get-task-allow")', STIK, "host get-task-allow preflight")
+require("jit_check_debugged() && isDebuggerAttached()", STIK, "live debugger readiness")
+require("__attribute__((noinline, optnone, naked))", JIT, "universal naked BRK ABI")
+if "stikdebug" not in INFO.get("LSApplicationQueriesSchemes", []):
+    raise SystemExit("MOBILE_CONTRACT_FAIL: missing official StikDebug URL query scheme")
+forbid("stikjit://enable-jit", STIK, "legacy StikJIT URL launch")
 forbid("func prepareExactPool", STIK, "obsolete in-place JIT placeholder blessing")
 require('productState = .failed("Local JIT/Metal runtime validation failed.', CONTENT,
         "visible runtime-gate failure")

@@ -1,4 +1,5 @@
 import UIKit
+import Darwin
 
 /// Helper to enable JIT via StikDebug/StikJIT URL scheme.
 /// Opens StikDebug with an embedded script, polls for CS_DEBUGGED,
@@ -21,37 +22,64 @@ enum StikJITHelper {
         return scriptBase64
     }
 
-    /// Check if StikDebug or StikJIT is available by trying to open their URL.
+    /// Check whether the official StikDebug URL scheme is installed.
+    /// StikDebug still accepts the legacy `stikjit` alias, but its current
+    /// integration contract documents `stikdebug://enable-jit`.
     static var isAvailable: Bool {
-        guard let url = URL(string: "stikjit://enable-jit") else { return false }
+        guard let url = URL(string: "stikdebug://enable-jit") else { return false }
         return UIApplication.shared.canOpenURL(url)
     }
 
-    /// Open StikDebug with our JIT script embedded in the URL.
-    /// StikDebug will attach to our process and run the script.
+    /// Open StikDebug with SteamIOS's single developer-defined custom script.
+    ///
+    /// SteamIOS intentionally uses a custom script rather than stock
+    /// universal.js because Wine/FEX also need our stop/signal forwarding.
+    /// The script still implements StikJIT's universal BRK #0xf00d ABI
+    /// (x16=0 detach, x16=1 prepare region).
     static func enableJIT(completion: @escaping (Bool) -> Void) {
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.nightvibes33.steamios"
-
-        // Build the URL with script data
-        let scriptData = resolvedScriptBase64.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        let urlString = "stikjit://enable-jit?bundle-id=\(bundleId)&script-data=\(scriptData)"
-
-        guard let url = URL(string: urlString) else {
-            LogStore.shared.log("Failed to build StikJIT URL", level: .error)
+        guard checkAppEntitlement("get-task-allow") else {
+            LogStore.shared.log(
+                "StikDebug JIT refused: the running SteamIOS signature does not contain get-task-allow.",
+                level: .error
+            )
             completion(false)
             return
         }
 
-        LogStore.shared.log("Opening StikDebug to enable JIT...")
+        guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else {
+            LogStore.shared.log("StikDebug JIT refused: bundle identifier is unavailable.", level: .error)
+            completion(false)
+            return
+        }
+
+        var components = URLComponents()
+        components.scheme = "stikdebug"
+        components.host = "enable-jit"
+        components.queryItems = [
+            URLQueryItem(name: "bundle-id", value: bundleId),
+            URLQueryItem(name: "pid", value: String(getpid())),
+            URLQueryItem(name: "script-data", value: resolvedScriptBase64),
+        ]
+
+        guard let url = components.url else {
+            LogStore.shared.log("Failed to build the official StikDebug JIT URL.", level: .error)
+            completion(false)
+            return
+        }
+
+        LogStore.shared.log(
+            "Opening StikDebug for pid=\(getpid()) bundle=\(bundleId) with SteamIOS custom universal-protocol script..."
+        )
 
         UIApplication.shared.open(url, options: [:]) { success in
-            if !success {
+            guard success else {
                 LogStore.shared.log("Failed to open StikDebug. Is it installed?", level: .error)
                 completion(false)
                 return
             }
 
-            // Poll for CS_DEBUGGED flag
+            // CS_DEBUGGED is sticky after detach on iOS. Require a LIVE traced
+            // debugger as well so retries cannot accept a stale flag.
             pollForJIT(completion: completion)
         }
     }
@@ -62,9 +90,13 @@ enum StikJITHelper {
                                    completion: @escaping (Bool) -> Void) {
         let deadline = Date().addingTimeInterval(timeout)
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            if jit_check_debugged() {
+            if jit_check_debugged() && isDebuggerAttached() {
                 timer.invalidate()
-                LogStore.shared.log("JIT enabled! (CS_DEBUGGED set)", level: .success)
+                unsetenv("MADEIRA_DETACHED")
+                LogStore.shared.log(
+                    "StikDebug custom script is live (CS_DEBUGGED + P_TRACED). JIT protocol may proceed.",
+                    level: .success
+                )
                 completion(true)
                 return
             }
@@ -726,13 +758,19 @@ enum StikJITHelper {
         return (rx: rxPtr, rw: rwPtr, size: poolSize)
     }
 
-    /// Detach the debugger. Call this after Wine is done loading PE DLLs.
+    /// Complete the StikJIT universal protocol after every executable region
+    /// and writable alias has been prepared. Never issue the detach BRK twice:
+    /// CS_DEBUGGED remains sticky after the live debugger is gone.
     static func detachDebugger() {
-        LogStore.shared.log("Detaching debugger...")
+        guard isDebuggerAttached() else {
+            setenv("MADEIRA_DETACHED", "1", 1)
+            LogStore.shared.log("Debugger already detached; skipping duplicate JIT26Detach.", level: .debug)
+            return
+        }
+
+        LogStore.shared.log("Detaching debugger after JIT allocator initialization...")
         jit26_detach()
-        // task #34: signal in-process waiters (share-probe poller). CS_DEBUGGED
-        // is sticky post-detach, so an env flag is the reliable signal.
         setenv("MADEIRA_DETACHED", "1", 1)
-        LogStore.shared.log("Debugger detached.", level: .success)
+        LogStore.shared.log("Debugger detached; executable JIT pool remains active.", level: .success)
     }
 }

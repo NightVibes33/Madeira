@@ -89,18 +89,34 @@ private enum SteamOSRuntimeGate {
     private static var executableJITProven = false
 
     static func validate(log: LogStore) -> Bool {
+        guard checkAppEntitlement("get-task-allow") else {
+            log.log(
+                "[JIT] NOT READY — the running signature lacks get-task-allow; reinstall with a compatible signing method.",
+                level: .error
+            )
+            return false
+        }
+
         guard jit_check_debugged() else {
             log.log("[JIT] NOT READY — attach StikDebug/JIT before launching Steam or a game.", level: .error)
             return false
         }
 
-        // CS_DEBUGGED alone is not enough. Prove that this process can write
-        // generated ARM64 code through the RW alias and execute it through the
-        // RX alias. jit_test_execute() must return the sentinel value 42.
+        // CS_DEBUGGED is sticky after JIT26Detach. A new preparation pass needs
+        // a live debugger/script session, otherwise BRK #0xf00d cannot service
+        // the allocation request.
+        guard isDebuggerAttached() else {
+            log.log("[JIT] NOT READY — CS_DEBUGGED is stale but no live StikDebug session is attached.", level: .error)
+            return false
+        }
+
+        // Prove the exact production mechanism: StikDebug/debugserver allocates
+        // RX, SteamIOS vm_remaps an RW alias, writes code, and executes through
+        // RX. Do not accept the legacy self-created Strategy 1 as product proof.
         if !executableJITProven {
-            let probe = jit_test_execute()
+            let probe = jit_test_execute_strategy2()
             guard probe == 42 else {
-                log.log("[JIT] EXECUTION PROBE FAILED (result \(probe)) — refusing to start Wine/FEX.", level: .error)
+                log.log("[JIT] DEBUGGER-RX EXECUTION PROBE FAILED (result \(probe)) — refusing to start Wine/FEX.", level: .error)
                 return false
             }
             executableJITProven = true
@@ -1290,7 +1306,7 @@ struct ContentView: View {
         MetalHostView.shared.alpha = 0
         MetalHostView.shared.isHidden = false
 
-        if jit_check_debugged() {
+        if jit_check_debugged() && isDebuggerAttached() && getenv("MADEIRA_DETACHED") == nil {
             launchSteamProductRuntime()
             return
         }
@@ -1300,7 +1316,9 @@ struct ContentView: View {
                 if success {
                     self.launchSteamProductRuntime()
                 } else {
-                    let message = "JIT is required for local Windows execution. Install/open StikDebug and retry."
+                    let message = checkAppEntitlement("get-task-allow")
+                        ? "JIT is required for local Windows execution. Install/open StikDebug and retry."
+                        : "This SteamIOS signature is missing get-task-allow. Reinstall using a signing method that preserves it."
                     self.productState = .failed(message)
                     _ = self.logStore.writeDiagnosticReport(
                         reason: "Steam startup failed after JIT request",
@@ -1546,6 +1564,7 @@ struct ContentView: View {
             // Live debugger/JIT state, not the (macOS-only, never granted on
             // iOS) allow-jit entitlement the old badge checked.
             entitlementBadge("JIT", granted: debuggerAttached)
+            entitlementBadge("Debuggable", granted: ents.getTaskAllow)
             entitlementBadge("Memory+", granted: ents.increasedMemory)
             entitlementBadge("64-bit VA", granted: ents.extendedVA)
             Spacer()
@@ -1588,7 +1607,8 @@ struct ContentView: View {
     private func logEntitlementStatus() {
         guard let ents = entitlements else { return }
         logStore.log("Checking entitlements...")
-        logStore.log("  allow-jit: \(ents.jitAllowed)", level: ents.jitAllowed ? .success : .error)
+        logStore.log("  get-task-allow: \(ents.getTaskAllow)", level: ents.getTaskAllow ? .success : .error)
+        logStore.log("  allow-jit: \(ents.jitAllowed)", level: ents.jitAllowed ? .success : .debug)
         logStore.log("  increased-memory-limit: \(ents.increasedMemory)", level: ents.increasedMemory ? .success : .debug)
         logStore.log("  extended-virtual-addressing: \(ents.extendedVA)", level: ents.extendedVA ? .success : .debug)
         if !ents.extendedVA {
@@ -1985,22 +2005,38 @@ struct ContentView: View {
 
     private func enableJITViaStikDebug() {
         jitStatus = .testing
-        logStore.log("Requesting JIT via StikDebug URL scheme...")
+        logStore.log("Requesting JIT via the official StikDebug URL protocol...")
 
         StikJITHelper.enableJIT { success in
-            if success {
-                jitStatus = .available
-                logStore.log("JIT enabled! Debugger attached.", level: .success)
-            } else {
-                jitStatus = .unavailable
-                logStore.log("Failed to enable JIT via StikDebug", level: .error)
+            guard success else {
+                DispatchQueue.main.async {
+                    jitStatus = .unavailable
+                    logStore.log("Failed to establish the StikDebug script session.", level: .error)
+                }
+                return
+            }
+
+            // Attachment is only phase 1 on TXM/SPTM. Prove the same
+            // debugger-owned RX + RW-alias mechanism used by the product pool.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let probe = jit_test_execute_strategy2()
+                DispatchQueue.main.async {
+                    if probe == 42 {
+                        jitStatus = .available
+                        logStore.log("JIT protocol ready: debugger-owned RX execution returned 42.", level: .success)
+                    } else {
+                        jitStatus = .unavailable
+                        logStore.log("JIT protocol failed executable proof (result \(probe)).", level: .error)
+                    }
+                }
             }
         }
     }
 
-    /// Full sequence: allocate JIT pool, start wineserver, start Wine.
-    /// Debugger stays attached during PE loading so mprotect_exec can use BRK
-    /// to prepare code pages. Detach happens after Wine finishes + recovery.
+    /// Full StikJIT sequence: prove the live script, allocate/prepare the
+    /// complete executable RX pool, create its RW alias, detach once, then start
+    /// wineserver/Wine/FEX. All translated code must stay inside that prepared
+    /// process-lifetime pool after detach.
     private func runWineFullSequence(completion: @escaping (Int) -> Void = { _ in }) {
         guard wine_process_is_running() == 0 && wineserver_is_running() == 0 else {
             productState = .failed("A previous Wine session is still active. Wait a moment and retry.")
@@ -2593,9 +2629,14 @@ struct ContentView: View {
             }
             Thread.sleep(forTimeInterval: 2.0)
 
-            // Step 6: Detach debugger — main thread should have zero accumulated hang time
-            logStore.log("Detaching debugger...")
-            StikJITHelper.detachDebugger()
+            // Step 6: Detach only if a diagnostic run intentionally kept the
+            // debugger attached. Normal product startup already detached exactly
+            // once immediately after the executable pool + RW alias were ready.
+            if isDebuggerAttached() {
+                StikJITHelper.detachDebugger()
+            } else {
+                logStore.log("[JIT] debugger already detached after pool initialization.", level: .debug)
+            }
 
             DispatchQueue.main.async { heartbeat.invalidate() }
             if !wineStillRunning {

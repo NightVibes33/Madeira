@@ -169,7 +169,7 @@ jobs:
         run: |
           grep -F 'private enum SteamOSRuntimeGate' app/Madeira/ContentView.swift
           grep -F 'jit_check_debugged()' app/Madeira/ContentView.swift
-          grep -F 'let probe = jit_test_execute()' app/Madeira/ContentView.swift
+          grep -F 'let probe = jit_test_execute_strategy2()' app/Madeira/ContentView.swift
           grep -F 'guard probe == 42' app/Madeira/ContentView.swift
           grep -F 'MTLCreateSystemDefaultDevice()' app/Madeira/ContentView.swift
           grep -F 'STEAMOS_IOS_LOCAL_METAL' app/Madeira/ContentView.swift
@@ -179,6 +179,15 @@ jobs:
           grep -F 'pre-remap RX validation' app/Madeira/StikJITHelper.swift
           grep -F 'post-alias RX validation' app/Madeira/StikJITHelper.swift
           grep -F 'startup-reservation' app/Madeira/StikJITHelper.swift
+          grep -F 'components.scheme = "stikdebug"' app/Madeira/StikJITHelper.swift
+          grep -F 'URLQueryItem(name: "bundle-id"' app/Madeira/StikJITHelper.swift
+          grep -F 'URLQueryItem(name: "pid"' app/Madeira/StikJITHelper.swift
+          grep -F 'URLQueryItem(name: "script-data"' app/Madeira/StikJITHelper.swift
+          grep -F 'checkAppEntitlement("get-task-allow")' app/Madeira/StikJITHelper.swift
+          grep -F 'jit_check_debugged() && isDebuggerAttached()' app/Madeira/StikJITHelper.swift
+          grep -F '__attribute__((noinline, optnone, naked))' app/Madeira/JITAllocator.c
+          grep -F '<string>stikdebug</string>' app/Madeira/Info.plist
+          ! grep -F 'stikjit://enable-jit' app/Madeira/StikJITHelper.swift
           ! grep -F 'func prepareExactPool' app/Madeira/StikJITHelper.swift
           grep -F 'PRODUCT_BUNDLE_IDENTIFIER = com.nightvibes33.steamios;' app/Madeira.xcodeproj/project.pbxproj
           grep -F 'Assets.xcassets in Resources' app/Madeira.xcodeproj/project.pbxproj
