@@ -12,6 +12,7 @@ GAMEPAD = (ROOT / "app/Madeira/GamepadInput.swift").read_text()
 TOUCH = (ROOT / "app/Madeira/TouchGamepad.swift").read_text()
 WINE = (ROOT / "app/Madeira/WineProcessBridge.m").read_text()
 STIK = (ROOT / "app/Madeira/StikJITHelper.swift").read_text()
+LOGSTORE = (ROOT / "app/Madeira/LogStore.swift").read_text()
 WINIOS_H = (ROOT / "app/Madeira/Winios/Winios.h").read_text()
 WINIOS_M = (ROOT / "app/Madeira/Winios/Winios.m").read_text()
 INFO = plistlib.loads((ROOT / "app/Madeira/Info.plist").read_bytes())
@@ -28,7 +29,10 @@ def forbid(needle: str, haystack: str, label: str) -> None:
 require("struct SteamIOSApp: App", APP, "SteamIOS app root")
 require("var body: some View {\n        steamProductBody", CONTENT, "Steam-only ContentView root")
 require("startSteamAutomatically()", CONTENT, "automatic Steam startup")
-require('case .startingJIT: return "Starting Steam"', CONTENT, "Steam startup UI")
+require("if case .failed(let message) = productState", CONTENT, "failure-only startup overlay")
+forbid('return "Starting Steam"', CONTENT, "visible Starting Steam interstitial")
+forbid('return "Launching Steam"', CONTENT, "visible Launching Steam interstitial")
+require('"\\(winDir)\\\\steam.exe" -bigpicture -no-cef-sandbox', CONTENT, "Steam Big Picture launch")
 for legacy in (
     "Install Madeira via SideStore or Xcode",
     "Reinstall Madeira with the same IPA",
@@ -54,8 +58,10 @@ require('setenv("WINE_IOS_JIT_SIZE"', CONTENT, "real Wine JIT pool size")
 require("JIT attach timed out after", STIK, "bounded JIT attach timeout")
 require('productState = .failed("Local JIT/Metal runtime validation failed.', CONTENT,
         "visible runtime-gate failure")
-require('productState = .failed("Executable JIT pool setup failed after JIT attached.', CONTENT,
+require('let jitFailure = "Executable JIT pool setup failed after JIT attached.', CONTENT,
         "visible JIT-pool failure")
+require('reason: "Executable JIT pool allocation failed"', CONTENT,
+        "JIT-pool diagnostic report")
 
 # Full-screen touch works without the optional virtual controller.
 require("@Published var touchScreenEnabled = true", CONTENT, "touchscreen default ON")
@@ -108,6 +114,14 @@ require("winios_post_key", CONTENT, "Windows key bridge")
 # iPhone/iPad packaging + orientation contract.
 if INFO.get("CFBundleDisplayName") != "SteamIOS":
     raise SystemExit("MOBILE_CONTRACT_FAIL: CFBundleDisplayName is not SteamIOS")
+if INFO.get("UIFileSharingEnabled") is not True:
+    raise SystemExit("MOBILE_CONTRACT_FAIL: UIFileSharingEnabled must expose Documents in Files")
+if INFO.get("LSSupportsOpeningDocumentsInPlace") is not True:
+    raise SystemExit("MOBILE_CONTRACT_FAIL: LSSupportsOpeningDocumentsInPlace must be true")
+require('appendingPathComponent("SteamIOS Crash Logs"', LOGSTORE, "Files-visible crash log directory")
+require("recoverPreviousSessionIfNeeded", LOGSTORE, "unexpected-termination recovery")
+require("writeDiagnosticReport", LOGSTORE, "explicit runtime diagnostic reports")
+require("NSSetUncaughtExceptionHandler", APP, "uncaught Objective-C exception capture")
 if INFO.get("UIRequiresFullScreen") is not True:
     raise SystemExit("MOBILE_CONTRACT_FAIL: UIRequiresFullScreen must be true")
 caps = INFO.get("UIRequiredDeviceCapabilities", [])
