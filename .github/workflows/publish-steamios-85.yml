@@ -1,0 +1,70 @@
+name: Publish SteamIOS build 85
+
+on:
+  push:
+    branches: [steamos-ios]
+    paths:
+      - ".github/workflows/publish-steamios-85.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download green build 85 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Debug-unsigned
+          path: dist
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 36727537597
+
+      - name: Verify artifact payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa="$(find dist -type f -name 'SteamIOS.ipa' -print -quit)"
+          info="$(find dist -type f -name 'build-info.json' -print -quit)"
+          sums="$(find dist -type f -name 'SHA256SUMS' -print -quit)"
+          ipa_sha="$(find dist -type f -name 'SteamIOS.ipa.sha256' -print -quit)"
+          test -n "$ipa" && test -s "$ipa"
+          test -n "$info" && test -s "$info"
+          test -n "$sums" && test -s "$sums"
+          test -n "$ipa_sha" && test -s "$ipa_sha"
+          (
+            cd "$(dirname "$sums")"
+            sha256sum -c "$(basename "$sums")"
+          )
+          grep -F '"commit": "f42fea573ce0cf16ed818d73a2f6eefac70a5ea7"' "$info"
+          mkdir -p release
+          cp "$ipa" release/SteamIOS.ipa
+          cp "$ipa_sha" release/SteamIOS.ipa.sha256
+          cp "$info" release/build-info.json
+          cp "$sums" release/SHA256SUMS
+          sha256sum release/SteamIOS.ipa
+          echo "STEAMIOS_85_RELEASE_GATE_OK"
+
+      - name: Publish direct IPA release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="steamios-build-85"
+          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+            --target "f42fea573ce0cf16ed818d73a2f6eefac70a5ea7" \
+            --title "SteamIOS build 85" \
+            --notes "Green unsigned Debug IPA from workflow run 36727537597. Includes the official StikDebug PID/get-task-allow/live-attach protocol alignment, debugger-owned executable RX JIT pool validation, and single-source custom JIT script."
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+            release/SteamIOS.ipa \
+            release/SteamIOS.ipa.sha256 \
+            release/build-info.json \
+            release/SHA256SUMS \
+            --clobber
+          echo "STEAMIOS_85_RELEASE_PUBLISHED"
