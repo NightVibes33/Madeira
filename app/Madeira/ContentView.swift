@@ -1580,38 +1580,10 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
 
                 Button("Steam") {
-                    // Real Steam owns AppID/game identity for every child it launches.
-                    // Clear any host-only standalone regression override before entering
-                    // the Steam client path.
-                    unsetenv("MADEIRA_STEAM_APP_PATH")
-                    unsetenv("MADEIRA_STEAM_APP_ID")
-
-                    // Steam S3 first boot: virtual desktop (Steam needs a
-                    // window manager) + services.exe (SCM → rpcss for Steam's
-                    // COM, the chain proven in the rpcss milestone) + steam.exe
-                    // itself, all launched by C:\steam-launch.bat (pushed to
-                    // the prefix). Batch avoids quote-escaping hell; combase's
-                    // 5s OpenSCManager retry covers the services-vs-steam race.
-                    // First run: download Valve's official Windows SteamSetup.exe
-                    // into C:\ and execute it through Madeira's shipped WoW64 path
-                    // (wow64.dll + wow64win.dll + xtajit.dll). Later runs launch
-                    // the installed Steam client directly. CEF remains jitless
-                    // until its runtime-x86 JIT path is stable under FEX.
-                    let steamSize = preferredSteamDesktopSize()
-                    let deskW = steamSize.width, deskH = steamSize.height
-                    logStore.log("Steam display target: \(deskW)x\(deskH) for \(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone")")
-                    if !steamIsInstalled() {
-                        Task { @MainActor in
-                            await bootstrapSteamFirstRun(deskW: deskW, deskH: deskH)
-                        }
-                        return
-                    }
-                    // Installed path: regenerate C:\steam-launch.bat and launch
-                    // Steam inside the existing Madeira/Wine pseudo-process model.
-                    guard prepareSteamLaunch() else { return }
-                    configureSteamProductRuntime(batch: "steam-launch.bat",
-                                                 deskW: deskW, deskH: deskH)
-                    runWineFullSequence()
+                    // Engineering shortcut uses the exact shipping path. The
+                    // complete Steam client is already bundled; no installer is
+                    // executed on-device.
+                    launchSteamProductRuntime()
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
@@ -2579,9 +2551,9 @@ struct ContentView: View {
         }
     }
 
-    /// Resolve the installed Steam directory in the app-owned Wine prefix.
-    /// The first-run bootstrap installs the official Windows client into the
-    /// normal 32-bit Program Files tree, but the 64-bit tree remains accepted.
+    /// Resolve the preinstalled Steam directory in the app-owned Wine prefix.
+    /// Clean builds ship the fully updated Windows client in Program Files (x86);
+    /// the 64-bit Program Files tree remains accepted for older development data.
     private func steamInstallLocation() -> (win: String, unix: String)? {
         let fm = FileManager.default
         let prefix = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -2636,7 +2608,7 @@ struct ContentView: View {
     /// Locate an installed Steam client and regenerate the stable launch batch.
     private func prepareSteamLaunch() -> Bool {
         guard let (winDir, _) = steamInstallLocation() else {
-            logStore.log("Steam is not installed yet; first-run bootstrap is required.", level: .error)
+            logStore.log("Bundled Steam client is not present in the Wine prefix.", level: .error)
             return false
         }
 
