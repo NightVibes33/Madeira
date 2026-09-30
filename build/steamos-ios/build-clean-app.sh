@@ -214,13 +214,390 @@ else
 fi
 mv "$PREFIX_NEW" "$PREFIX_TEMPLATE"
 
+PREFIX_LIST="$PREFIX_WORK/prefix-template.list"
+tar -tzf "$PREFIX_TEMPLATE" > "$PREFIX_LIST"
 for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
-  tar -tzf "$PREFIX_TEMPLATE" | grep -Fq "$required" || {
+  grep -Fq "$required" "$PREFIX_LIST" || {
     echo "error: rebuilt prefix missing $required" >&2
     exit 1
   }
 done
-tar -tzf "$PREFIX_TEMPLATE" | grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' || {
+grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe
+steam_tree_bytes="$(du -sk "$STEAM_DEST" | awk '{print $1 * 1024}')"
+echo "STEAMIOS_PREFIX_FULL_STEAM_OK bytes=$steam_tree_bytes archive=$(stat -f%z "$PREFIX_TEMPLATE")"
+
+# Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
+# Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
+ICON_SOURCE="$R/build/steamos-ios/assets/SteamIOS-AppIcon-source.jpeg"
+ICON_DEST="$R/app/Madeira/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+ICON_SHA256="ccbbe73a8f06d5b5cd605adf313d8cafa7de7b544eed7f3ca1fd4334953dcea4"
+test -s "$ICON_SOURCE" || { echo "error: missing SteamIOS app icon source" >&2; exit 1; }
+actual_icon_sha="$(shasum -a 256 "$ICON_SOURCE" | awk '{print $1}')"
+[ "$actual_icon_sha" = "$ICON_SHA256" ] || {
+  echo "error: SteamIOS app icon source checksum mismatch" >&2
+  exit 1
+}
+mkdir -p "$(dirname "$ICON_DEST")"
+/usr/bin/sips -s format png -z 1024 1024 "$ICON_SOURCE" --out "$ICON_DEST" >/dev/null
+test -s "$ICON_DEST" || { echo "error: failed to materialize AppIcon-1024.png" >&2; exit 1; }
+icon_dims="$(/usr/bin/sips -g pixelWidth -g pixelHeight "$ICON_DEST" 2>/dev/null)"
+printf '%s\n' "$icon_dims" | grep -q 'pixelWidth: 1024'
+printf '%s\n' "$icon_dims" | grep -q 'pixelHeight: 1024'
+echo "STEAMIOS_APP_ICON_OK sha256=$actual_icon_sha"
+
+rm -rf "$DERIVED"
+mkdir -p "$ARTIFACTS"
+
+xcodebuild   -project app/Madeira.xcodeproj   -scheme Madeira   -configuration Debug   -destination 'generic/platform=iOS'   -derivedDataPath "$DERIVED"   CODE_SIGNING_ALLOWED=NO   CODE_SIGNING_REQUIRED=NO   build
+
+test -d "$APP"
+test -s "$APP/Info.plist"
+test -s "$APP/SteamIOS"
+
+bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+[ "$bundle_id" = "com.nightvibes33.steamios" ] || {
+  echo "error: packaged bundle id is '$bundle_id' (expected com.nightvibes33.steamios)" >&2
+  exit 1
+}
+test -s "$APP/prefix-template.tar.gz" || {
+  echo "error: packaged prefix template missing" >&2
+  exit 1
+}
+PACKAGED_PREFIX_LIST="$PREFIX_WORK/packaged-prefix-template.list"
+tar -tzf "$APP/prefix-template.tar.gz" > "$PACKAGED_PREFIX_LIST"
+for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
+  grep -Fq "$required" "$PACKAGED_PREFIX_LIST" || {
+    echo "error: packaged full Steam client missing $required" >&2
+    exit 1
+  }
+done
+grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exeecho "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
+
+test -s "$APP/Assets.car" || {
+  echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_IDENTITY_OK bundle=$bundle_id assets=$(stat -f%z "$APP/Assets.car")"
+
+/usr/bin/codesign --verify --verbose=2 "$APP/d3d12/libmetalirconverter.dylib" >/dev/null 2>&1 || {
+  echo "error: bundled Metal Shader Converter dylib is not code-signed" >&2
+  exit 1
+}
+
+bash tools/packaging/package-ipa.sh "$APP" "$IPA"
+
+python3 - "$R" "$APP" "$IPA" "$ARTIFACTS/build-info.json" <<'PY'
+from __future__ import annotations
+import hashlib, json, pathlib, plistlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+app = pathlib.Path(sys.argv[2])
+ipa = pathlib.Path(sys.argv[3])
+out = pathlib.Path(sys.argv[4])
+
+def cmd(*args: str, cwd: pathlib.Path | None = None) -> str:
+    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+def rev(path: str) -> str | None:
+    p = root / path
+    if not (p / ".git").exists() and not (root / ".git" / "modules" / path).exists():
+        try:
+            return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+        except Exception:
+            return None
+    try:
+        return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+    except Exception:
+        return None
+
+def sha256(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+xcode = cmd("xcodebuild", "-version").splitlines()
+with (app / "Info.plist").open("rb") as f:
+    plist = plistlib.load(f)
+executable = plist.get("CFBundleExecutable")
+if not executable or not (app / executable).is_file():
+    raise SystemExit("built app has no valid CFBundleExecutable")
+
+info = {
+    "commit": cmd("git", "rev-parse", "HEAD", cwd=root),
+    "fex": rev("FEX"),
+    "wine": rev("wine"),
+    "dxmt": rev("research/dxmt"),
+    "llvm": rev("toolchains/llvm-project"),
+    "llvm_mingw": {
+        "release": "20260922",
+        "archive_sha256": "52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3",
+    },
+    "vkd3d": None,
+    "moltenvk": None,
+    "xcode": xcode,
+    "sdk": cmd("xcrun", "--sdk", "iphoneos", "--show-sdk-version"),
+    "app": {
+        "path": str(app),
+        "bundle_identifier": plist.get("CFBundleIdentifier"),
+        "executable": executable,
+        "executable_sha256": sha256(app / executable),
+    },
+    "ipa": {
+        "path": str(ipa),
+        "sha256": sha256(ipa),
+        "size": ipa.stat().st_size,
+    },
+}
+out.write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
+print(f"BUILD_INFO_OK {out}")
+PY
+
+(
+  cd "$ARTIFACTS"
+  shasum -a 256 SteamIOS.ipa build-info.json > SHA256SUMS
+)
+
+echo "STEAMIOS_CLEAN_APP_OK app=$APP ipa=$IPA build_info=$ARTIFACTS/build-info.json"
+ "$PREFIX_LIST" || {
+  echo "error: rebuilt prefix missing steamwebhelper.exe" >&2
+  exit 1
+}
+
+steam_tree_bytes="$(du -sk "$STEAM_DEST" | awk '{print $1 * 1024}')"
+echo "STEAMIOS_PREFIX_FULL_STEAM_OK bytes=$steam_tree_bytes archive=$(stat -f%z "$PREFIX_TEMPLATE")"
+
+# Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
+# Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
+ICON_SOURCE="$R/build/steamos-ios/assets/SteamIOS-AppIcon-source.jpeg"
+ICON_DEST="$R/app/Madeira/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+ICON_SHA256="ccbbe73a8f06d5b5cd605adf313d8cafa7de7b544eed7f3ca1fd4334953dcea4"
+test -s "$ICON_SOURCE" || { echo "error: missing SteamIOS app icon source" >&2; exit 1; }
+actual_icon_sha="$(shasum -a 256 "$ICON_SOURCE" | awk '{print $1}')"
+[ "$actual_icon_sha" = "$ICON_SHA256" ] || {
+  echo "error: SteamIOS app icon source checksum mismatch" >&2
+  exit 1
+}
+mkdir -p "$(dirname "$ICON_DEST")"
+/usr/bin/sips -s format png -z 1024 1024 "$ICON_SOURCE" --out "$ICON_DEST" >/dev/null
+test -s "$ICON_DEST" || { echo "error: failed to materialize AppIcon-1024.png" >&2; exit 1; }
+icon_dims="$(/usr/bin/sips -g pixelWidth -g pixelHeight "$ICON_DEST" 2>/dev/null)"
+printf '%s\n' "$icon_dims" | grep -q 'pixelWidth: 1024'
+printf '%s\n' "$icon_dims" | grep -q 'pixelHeight: 1024'
+echo "STEAMIOS_APP_ICON_OK sha256=$actual_icon_sha"
+
+rm -rf "$DERIVED"
+mkdir -p "$ARTIFACTS"
+
+xcodebuild   -project app/Madeira.xcodeproj   -scheme Madeira   -configuration Debug   -destination 'generic/platform=iOS'   -derivedDataPath "$DERIVED"   CODE_SIGNING_ALLOWED=NO   CODE_SIGNING_REQUIRED=NO   build
+
+test -d "$APP"
+test -s "$APP/Info.plist"
+test -s "$APP/SteamIOS"
+
+bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+[ "$bundle_id" = "com.nightvibes33.steamios" ] || {
+  echo "error: packaged bundle id is '$bundle_id' (expected com.nightvibes33.steamios)" >&2
+  exit 1
+}
+test -s "$APP/prefix-template.tar.gz" || {
+  echo "error: packaged prefix template missing" >&2
+  exit 1
+}
+for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
+  tar -tzf "$APP/prefix-template.tar.gz" | grep -Fq "$required" || {
+    echo "error: packaged full Steam client missing $required" >&2
+    exit 1
+  }
+done
+tar -tzf "$APP/prefix-template.tar.gz" | grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' || {
+  echo "error: packaged full Steam client missing steamwebhelper.exe" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
+
+test -s "$APP/Assets.car" || {
+  echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_IDENTITY_OK bundle=$bundle_id assets=$(stat -f%z "$APP/Assets.car")"
+
+/usr/bin/codesign --verify --verbose=2 "$APP/d3d12/libmetalirconverter.dylib" >/dev/null 2>&1 || {
+  echo "error: bundled Metal Shader Converter dylib is not code-signed" >&2
+  exit 1
+}
+
+bash tools/packaging/package-ipa.sh "$APP" "$IPA"
+
+python3 - "$R" "$APP" "$IPA" "$ARTIFACTS/build-info.json" <<'PY'
+from __future__ import annotations
+import hashlib, json, pathlib, plistlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+app = pathlib.Path(sys.argv[2])
+ipa = pathlib.Path(sys.argv[3])
+out = pathlib.Path(sys.argv[4])
+
+def cmd(*args: str, cwd: pathlib.Path | None = None) -> str:
+    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+def rev(path: str) -> str | None:
+    p = root / path
+    if not (p / ".git").exists() and not (root / ".git" / "modules" / path).exists():
+        try:
+            return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+        except Exception:
+            return None
+    try:
+        return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+    except Exception:
+        return None
+
+def sha256(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+xcode = cmd("xcodebuild", "-version").splitlines()
+with (app / "Info.plist").open("rb") as f:
+    plist = plistlib.load(f)
+executable = plist.get("CFBundleExecutable")
+if not executable or not (app / executable).is_file():
+    raise SystemExit("built app has no valid CFBundleExecutable")
+
+info = {
+    "commit": cmd("git", "rev-parse", "HEAD", cwd=root),
+    "fex": rev("FEX"),
+    "wine": rev("wine"),
+    "dxmt": rev("research/dxmt"),
+    "llvm": rev("toolchains/llvm-project"),
+    "llvm_mingw": {
+        "release": "20260922",
+        "archive_sha256": "52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3",
+    },
+    "vkd3d": None,
+    "moltenvk": None,
+    "xcode": xcode,
+    "sdk": cmd("xcrun", "--sdk", "iphoneos", "--show-sdk-version"),
+    "app": {
+        "path": str(app),
+        "bundle_identifier": plist.get("CFBundleIdentifier"),
+        "executable": executable,
+        "executable_sha256": sha256(app / executable),
+    },
+    "ipa": {
+        "path": str(ipa),
+        "sha256": sha256(ipa),
+        "size": ipa.stat().st_size,
+    },
+}
+out.write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
+print(f"BUILD_INFO_OK {out}")
+PY
+
+(
+  cd "$ARTIFACTS"
+  shasum -a 256 SteamIOS.ipa build-info.json > SHA256SUMS
+)
+
+echo "STEAMIOS_CLEAN_APP_OK app=$APP ipa=$IPA build_info=$ARTIFACTS/build-info.json"
+ "$PACKAGED_PREFIX_LIST" || {
+  echo "error: packaged full Steam client missing steamwebhelper.exe" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
+
+test -s "$APP/Assets.car" || {
+  echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_IDENTITY_OK bundle=$bundle_id assets=$(stat -f%z "$APP/Assets.car")"
+
+/usr/bin/codesign --verify --verbose=2 "$APP/d3d12/libmetalirconverter.dylib" >/dev/null 2>&1 || {
+  echo "error: bundled Metal Shader Converter dylib is not code-signed" >&2
+  exit 1
+}
+
+bash tools/packaging/package-ipa.sh "$APP" "$IPA"
+
+python3 - "$R" "$APP" "$IPA" "$ARTIFACTS/build-info.json" <<'PY'
+from __future__ import annotations
+import hashlib, json, pathlib, plistlib, subprocess, sys
+
+root = pathlib.Path(sys.argv[1])
+app = pathlib.Path(sys.argv[2])
+ipa = pathlib.Path(sys.argv[3])
+out = pathlib.Path(sys.argv[4])
+
+def cmd(*args: str, cwd: pathlib.Path | None = None) -> str:
+    return subprocess.check_output(args, cwd=cwd, text=True).strip()
+
+def rev(path: str) -> str | None:
+    p = root / path
+    if not (p / ".git").exists() and not (root / ".git" / "modules" / path).exists():
+        try:
+            return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+        except Exception:
+            return None
+    try:
+        return cmd("git", "-C", str(p), "rev-parse", "HEAD")
+    except Exception:
+        return None
+
+def sha256(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+xcode = cmd("xcodebuild", "-version").splitlines()
+with (app / "Info.plist").open("rb") as f:
+    plist = plistlib.load(f)
+executable = plist.get("CFBundleExecutable")
+if not executable or not (app / executable).is_file():
+    raise SystemExit("built app has no valid CFBundleExecutable")
+
+info = {
+    "commit": cmd("git", "rev-parse", "HEAD", cwd=root),
+    "fex": rev("FEX"),
+    "wine": rev("wine"),
+    "dxmt": rev("research/dxmt"),
+    "llvm": rev("toolchains/llvm-project"),
+    "llvm_mingw": {
+        "release": "20260922",
+        "archive_sha256": "52e5f5a7b131021d0c39a37a38fa380a1da7885cd04bd61afd0cd4ecfb8bc1f3",
+    },
+    "vkd3d": None,
+    "moltenvk": None,
+    "xcode": xcode,
+    "sdk": cmd("xcrun", "--sdk", "iphoneos", "--show-sdk-version"),
+    "app": {
+        "path": str(app),
+        "bundle_identifier": plist.get("CFBundleIdentifier"),
+        "executable": executable,
+        "executable_sha256": sha256(app / executable),
+    },
+    "ipa": {
+        "path": str(ipa),
+        "sha256": sha256(ipa),
+        "size": ipa.stat().st_size,
+    },
+}
+out.write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
+print(f"BUILD_INFO_OK {out}")
+PY
+
+(
+  cd "$ARTIFACTS"
+  shasum -a 256 SteamIOS.ipa build-info.json > SHA256SUMS
+)
+
+echo "STEAMIOS_CLEAN_APP_OK app=$APP ipa=$IPA build_info=$ARTIFACTS/build-info.json"
+ "$PREFIX_LIST" || {
   echo "error: rebuilt prefix missing steamwebhelper.exe" >&2
   exit 1
 }
