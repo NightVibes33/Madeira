@@ -1,2 +1,2 @@
-trigger=steamios-full-steam-final-prefix-verify-20260929
-purpose=final-full-steam-build-after-payload-cache-and-pipefail-safe-verification
+trigger=steamios-full-steam-green-foundation-final-20260929
+purpose=clean-ipa-from-green-full-steam-post-spawn-landscape-commit
