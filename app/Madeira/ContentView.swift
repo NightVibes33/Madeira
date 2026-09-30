@@ -1167,7 +1167,7 @@ struct ContentView: View {
                     steamProcessObserved = true
                     presentBaseline = Int(madeira_get_present_count())
                     compositorBaseline = winios_get_surface_present_count()
-                    logStore.log("steam.exe spawned; waiting for a post-Steam surface.",
+                    logStore.log("Steam launch committed; waiting for a verified Steam window surface.",
                                  level: .success)
                     return
                 }
