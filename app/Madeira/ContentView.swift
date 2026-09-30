@@ -2547,23 +2547,37 @@ struct ContentView: View {
                                 "Wine prefix bootstrap did not create drive_c"])
             }
 
-            logStore.log("Steam first run: downloading Valve SteamSetup.exe...")
-            let (data, response) = try await URLSession.shared.data(from: officialURL)
+            let data: Data
+            if let cachedURL = Bundle.main.url(forResource: "SteamSetup",
+                                               withExtension: "exe",
+                                               subdirectory: "SteamPrecache"),
+               let cachedData = try? Data(contentsOf: cachedURL),
+               cachedData.count >= 1_000_000,
+               cachedData[cachedData.startIndex] == 0x4d,
+               cachedData[cachedData.index(after: cachedData.startIndex)] == 0x5a {
+                data = cachedData
+                logStore.log("Steam first run: using bundled SteamSetup.exe precache (\(cachedData.count) bytes)", level: .success)
+            } else {
+                logStore.log("Steam precache unavailable/invalid; downloading Valve SteamSetup.exe...")
+                let (downloaded, response) = try await URLSession.shared.data(from: officialURL)
 
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                throw NSError(domain: "SteamBootstrap", code: http.statusCode,
-                              userInfo: [NSLocalizedDescriptionKey: "Steam download HTTP \(http.statusCode)"])
-            }
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    throw NSError(domain: "SteamBootstrap", code: http.statusCode,
+                                  userInfo: [NSLocalizedDescriptionKey: "Steam download HTTP \(http.statusCode)"])
+                }
 
-            guard data.count >= 1_000_000,
-                  data[data.startIndex] == 0x4d,
-                  data[data.index(after: data.startIndex)] == 0x5a else {
-                throw NSError(domain: "SteamBootstrap", code: 2,
-                              userInfo: [NSLocalizedDescriptionKey: "Downloaded SteamSetup.exe is not a valid PE payload"])
+                guard downloaded.count >= 1_000_000,
+                      downloaded[downloaded.startIndex] == 0x4d,
+                      downloaded[downloaded.index(after: downloaded.startIndex)] == 0x5a else {
+                    throw NSError(domain: "SteamBootstrap", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "Downloaded SteamSetup.exe is not a valid PE payload"])
+                }
+                data = downloaded
+                logStore.log("SteamSetup.exe CDN fallback ready (\(downloaded.count) bytes)", level: .success)
             }
 
             try data.write(to: setupURL, options: .atomic)
-            logStore.log("SteamSetup.exe ready (\(data.count) bytes)", level: .success)
+            logStore.log("SteamSetup.exe staged into C:\\ from precache/fallback", level: .success)
 
             let bat = """
             @echo off\r
