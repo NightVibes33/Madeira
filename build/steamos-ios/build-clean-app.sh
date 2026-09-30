@@ -129,12 +129,12 @@ i386_count="$(find app/Madeira/i386-windows -maxdepth 1 -type f ! -name '.gitkee
 }
 echo "STEAMOS_IOS_WOW64_PAYLOAD_OK files=$i386_count"
 
-# A complete, already-updated Windows Steam client is assembled on the
-# workflow's Windows job. The iOS app never executes SteamSetup.exe. It only
-# expands this data archive into its app-owned Wine prefix.
-STEAM_PRECACHE_DIR="$R/app/Madeira/SteamPrecache"
-STEAM_PAYLOAD="$STEAM_PRECACHE_DIR/SteamPayload.tar.gz"
-STEAM_PAYLOAD_META="$STEAM_PRECACHE_DIR/SteamPayload.json"
+# A complete, already-updated Windows Steam client is assembled by the
+# workflow's Windows job. Merge that finished client directly into the bundled
+# Wine prefix. The iPhone never runs SteamSetup.exe.
+STEAM_PAYLOAD_DIR="$R/build/steamos-steam-payload"
+STEAM_PAYLOAD="$STEAM_PAYLOAD_DIR/SteamPayload.tar.gz"
+STEAM_PAYLOAD_META="$STEAM_PAYLOAD_DIR/SteamPayload.json"
 
 test -s "$STEAM_PAYLOAD" || {
   echo "error: preinstalled SteamPayload.tar.gz was not downloaded from the Windows staging job" >&2
@@ -155,21 +155,78 @@ required = {
     "Steam/steamclient64.dll",
     "Steam/steamui.dll",
     "Steam/bin/cef/cef.win7x64/steamwebhelper.exe",
-    "Steam/package/steam_client_win32.installed",
 }
 with tarfile.open(payload, "r:gz") as tf:
     names = {n.replace("\\", "/").lstrip("./") for n in tf.getnames()}
 missing = sorted(required - names)
 if missing:
     raise SystemExit("error: preinstalled Steam payload incomplete: " + ", ".join(missing))
+if not ({"Steam/package/steam_client_win64.installed", "Steam/package/steam_client_win32.installed"} & names):
+    raise SystemExit("error: preinstalled Steam payload has no installed client manifest")
 j = json.loads(meta.read_text(encoding="utf-8-sig"))
 if not j.get("payload_sha256") or not j.get("source_manifest_sha256"):
     raise SystemExit("error: Steam payload metadata is incomplete")
 print(f"STEAMIOS_FULL_STEAM_PRECACHE_OK archive_bytes={payload.stat().st_size} files={j.get('expanded_files')}")
 PY
 
-steam_payload_sha="$(shasum -a 256 "$STEAM_PAYLOAD" | awk '{print $1}')"
-echo "STEAMIOS_FULL_STEAM_PRECACHE_SHA256=$steam_payload_sha"
+# Expand the already-updated Steam tree into the prefix template at build time.
+# There is one bundled Steam copy: inside prefix-template.tar.gz.
+PREFIX_TEMPLATE="$R/app/Madeira/prefix-template.tar.gz"
+PREFIX_WORK="$(mktemp -d)"
+STEAM_WORK="$(mktemp -d)"
+PREFIX_NEW="$R/app/Madeira/prefix-template.tar.gz.full-steam"
+trap 'rm -rf "$PREFIX_WORK" "$STEAM_WORK" "$PREFIX_NEW"' EXIT
+
+tar -xzf "$PREFIX_TEMPLATE" -C "$PREFIX_WORK"
+tar -xzf "$STEAM_PAYLOAD" -C "$STEAM_WORK"
+
+DRIVE_C="$(find "$PREFIX_WORK" -type d -name drive_c -print -quit)"
+STEAM_SOURCE="$STEAM_WORK/Steam"
+if [ -z "$DRIVE_C" ] || [ ! -d "$DRIVE_C" ]; then
+  echo "error: prefix-template.tar.gz has no drive_c" >&2
+  exit 1
+fi
+test -d "$STEAM_SOURCE" || {
+  echo "error: SteamPayload.tar.gz has no Steam root" >&2
+  exit 1
+}
+
+STEAM_DEST="$DRIVE_C/Program Files (x86)/Steam"
+rm -rf "$STEAM_DEST"
+mkdir -p "$(dirname "$STEAM_DEST")"
+/usr/bin/ditto "$STEAM_SOURCE" "$STEAM_DEST"
+cp "$STEAM_PAYLOAD_META" "$STEAM_DEST/.steamios-bundled-client"
+
+test -s "$STEAM_DEST/steam.exe"
+test -s "$STEAM_DEST/steamclient64.dll"
+test -s "$STEAM_DEST/.steamios-bundled-client"
+find "$STEAM_DEST" -type f -iname 'steamwebhelper.exe' -print -quit | grep -q . || {
+  echo "error: merged Steam tree has no steamwebhelper.exe" >&2
+  exit 1
+}
+
+# Keep the prefix archive deterministic and compatible with the in-app extractor.
+# USTAR also prevents hidden pax-path metadata from bypassing subtree migration.
+if [ -d "$PREFIX_WORK/prefix" ]; then
+  tar --format=ustar -czf "$PREFIX_NEW" -C "$PREFIX_WORK" prefix
+else
+  tar --format=ustar -czf "$PREFIX_NEW" -C "$PREFIX_WORK" .
+fi
+mv "$PREFIX_NEW" "$PREFIX_TEMPLATE"
+
+for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
+  tar -tzf "$PREFIX_TEMPLATE" | grep -Fq "$required" || {
+    echo "error: rebuilt prefix missing $required" >&2
+    exit 1
+  }
+done
+tar -tzf "$PREFIX_TEMPLATE" | grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' || {
+  echo "error: rebuilt prefix missing steamwebhelper.exe" >&2
+  exit 1
+}
+
+steam_tree_bytes="$(du -sk "$STEAM_DEST" | awk '{print $1 * 1024}')"
+echo "STEAMIOS_PREFIX_FULL_STEAM_OK bytes=$steam_tree_bytes archive=$(stat -f%z "$PREFIX_TEMPLATE")"
 
 # Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
 # Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
@@ -204,32 +261,21 @@ bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.p
   echo "error: packaged bundle id is '$bundle_id' (expected com.nightvibes33.steamios)" >&2
   exit 1
 }
-test -s "$APP/SteamPrecache/SteamPayload.tar.gz" || {
-  echo "error: full SteamPayload.tar.gz missing from packaged app" >&2
+test -s "$APP/prefix-template.tar.gz" || {
+  echo "error: packaged prefix template missing" >&2
   exit 1
 }
-test -s "$APP/SteamPrecache/SteamPayload.json" || {
-  echo "error: SteamPayload.json missing from packaged app" >&2
+for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
+  tar -tzf "$APP/prefix-template.tar.gz" | grep -Fq "$required" || {
+    echo "error: packaged full Steam client missing $required" >&2
+    exit 1
+  }
+done
+tar -tzf "$APP/prefix-template.tar.gz" | grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' || {
+  echo "error: packaged full Steam client missing steamwebhelper.exe" >&2
   exit 1
 }
-python3 - "$APP/SteamPrecache/SteamPayload.tar.gz" <<'PY'
-import pathlib, sys, tarfile
-payload = pathlib.Path(sys.argv[1])
-required = {
-    "Steam/steam.exe",
-    "Steam/steamclient.dll",
-    "Steam/steamclient64.dll",
-    "Steam/steamui.dll",
-    "Steam/bin/cef/cef.win7x64/steamwebhelper.exe",
-    "Steam/package/steam_client_win32.installed",
-}
-with tarfile.open(payload, "r:gz") as tf:
-    names = {n.replace("\\", "/").lstrip("./") for n in tf.getnames()}
-missing = sorted(required - names)
-if missing:
-    raise SystemExit("error: packaged full Steam payload incomplete: " + ", ".join(missing))
-print(f"STEAMIOS_PACKAGED_FULL_STEAM_OK bytes={payload.stat().st_size}")
-PY
+echo "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
 
 test -s "$APP/Assets.car" || {
   echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2
