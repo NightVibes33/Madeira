@@ -1195,47 +1195,43 @@ struct ContentView: View {
             }
     }
 
-    /// Shipping product root. Users see Steam startup/Steam itself, never the
-    /// Madeira diagnostics launcher. Engineering controls remain compiled below
-    /// for development but are not reachable through the normal root view.
+    /// Shipping product root. Startup is intentionally chrome-free: after JIT
+    /// returns, the next user-visible surface is Steam itself. Internal JIT/Wine
+    /// state stays in the Files-visible diagnostic log instead of a "Starting
+    /// Steam" interstitial.
     private var steamProductBody: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             MadeiraMetalView().ignoresSafeArea()
 
-            if productState != .running {
+            if case .failed(let message) = productState {
                 VStack(spacing: 14) {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(.white)
-                    Text(productStatusTitle)
+                    Text("Steam could not start")
                         .font(.headline)
                         .foregroundStyle(.white)
-                    Text(productStatusDetail)
+                    Text(message)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.68))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
 
-                    if case .failed = productState {
-                        Button("Retry") {
-                            retrySteamProduct()
-                        }
-                        .buttonStyle(.borderedProminent)
+                    Button("Retry") {
+                        retrySteamProduct()
+                    }
+                    .buttonStyle(.borderedProminent)
 
-                        if !failureLogTail.isEmpty {
-                            ScrollView {
-                                Text(failureLogTail)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.72))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(10)
-                            }
-                            .frame(maxHeight: 150)
-                            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-                            .padding(.horizontal, 20)
+                    if !failureLogTail.isEmpty {
+                        ScrollView {
+                            Text(failureLogTail)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.72))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
                         }
+                        .frame(maxHeight: 150)
+                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 20)
                     }
                 }
                 .padding(24)
@@ -1243,28 +1239,6 @@ struct ContentView: View {
         }
         .background(Color.black)
         .ignoresSafeArea()
-    }
-
-    private var productStatusTitle: String {
-        switch productState {
-        case .startingJIT: return "Starting Steam"
-        case .launchingSteam: return "Launching Steam"
-        case .running: return ""
-        case .failed: return "Steam could not start"
-        }
-    }
-
-    private var productStatusDetail: String {
-        switch productState {
-        case .startingJIT:
-            return "Preparing local x86/x64 JIT execution. StikDebug may open once."
-        case .launchingSteam:
-            return "Starting Steam locally through Wine, FEX and Metal."
-        case .running:
-            return ""
-        case .failed(let message):
-            return message
-        }
     }
 
     private var failureLogTail: String {
@@ -1326,8 +1300,12 @@ struct ContentView: View {
                 if success {
                     self.launchSteamProductRuntime()
                 } else {
-                    self.productState = .failed(
-                        "JIT is required for local Windows execution. Install/open StikDebug and retry.")
+                    let message = "JIT is required for local Windows execution. Install/open StikDebug and retry."
+                    self.productState = .failed(message)
+                    _ = self.logStore.writeDiagnosticReport(
+                        reason: "Steam startup failed after JIT request",
+                        details: message
+                    )
                 }
             }
         }
@@ -1365,20 +1343,33 @@ struct ContentView: View {
 
             DispatchQueue.main.async {
                 guard ready else {
-                    self.productState = .failed(
-                        "The bundled Steam client is missing or incomplete. Reinstall this SteamIOS build.")
+                    let message = "The bundled Steam client is missing or incomplete. Reinstall this SteamIOS build."
+                    self.productState = .failed(message)
+                    _ = self.logStore.writeDiagnosticReport(
+                        reason: "Bundled Steam client validation failed",
+                        details: message
+                    )
                     return
                 }
                 guard self.prepareSteamLaunch() else {
-                    self.productState = .failed("The bundled Steam runtime could not be prepared.")
+                    let message = "The bundled Steam runtime could not be prepared."
+                    self.productState = .failed(message)
+                    _ = self.logStore.writeDiagnosticReport(
+                        reason: "Steam launch batch preparation failed",
+                        details: message
+                    )
                     return
                 }
                 self.configureSteamProductRuntime(batch: "steam-launch.bat", deskW: deskW, deskH: deskH)
                 self.runWineFullSequence { exitCode in
                     DispatchQueue.main.async {
                         if self.productState != .running {
-                            self.productState = .failed(
-                                "Wine/Steam exited before creating a display surface (exit \(exitCode)).")
+                            let message = "Wine/Steam exited before creating a display surface (exit \(exitCode))."
+                            self.productState = .failed(message)
+                            _ = self.logStore.writeDiagnosticReport(
+                                reason: "Steam runtime exited before first surface",
+                                details: message
+                            )
                         }
                     }
                 }
@@ -2443,8 +2434,13 @@ struct ContentView: View {
                 logStore.log("  JIT attachment succeeded, but no safe RX pool could be prepared.", level: .info)
                 logStore.log("  SteamIOS now tries the constructor-reserved exact region first,", level: .info)
                 logStore.log("  then a measured fixed hole, then legacy StikDebug first-fit.", level: .info)
+                let jitFailure = "Executable JIT pool setup failed after JIT attached. No safe RX region was available."
+                _ = logStore.writeDiagnosticReport(
+                    reason: "Executable JIT pool allocation failed",
+                    details: jitFailure
+                )
                 DispatchQueue.main.async {
-                    self.productState = .failed("Executable JIT pool setup failed after JIT attached. Check the JIT log and retry.")
+                    self.productState = .failed(jitFailure + " A crash report was saved in Files.")
                 }
                 logStore.uiPaused = false
                 completion(-1001)
@@ -2683,7 +2679,7 @@ struct ContentView: View {
         rem Keep cmd/explorer attached to Steam. Using START here lets the parent\r
         rem command exit immediately, which tears down wineserver underneath Steam.\r
         >"C:\\.steamios-steam-launched" echo Steam launch committed\r
-        "\(winDir)\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
+        "\(winDir)\\steam.exe" -bigpicture -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
         set "STEAM_EXIT=%ERRORLEVEL%"\r
         >"C:\\.steamios-steam-exit-code" echo %STEAM_EXIT%\r
         exit /b %STEAM_EXIT%\r
