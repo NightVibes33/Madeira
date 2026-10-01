@@ -243,7 +243,11 @@ printf '%s\n' "$icon_dims" | grep -q 'pixelWidth: 1024'
 printf '%s\n' "$icon_dims" | grep -q 'pixelHeight: 1024'
 echo "STEAMIOS_APP_ICON_OK sha256=$actual_icon_sha"
 
-rm -rf "$DERIVED"
+if [[ "${STEAMOS_PRESERVE_DERIVED_DATA:-0}" != "1" ]]; then
+  rm -rf "$DERIVED"
+else
+  echo "STEAMIOS_INCREMENTAL_DERIVED_DATA_PRESERVED path=$DERIVED"
+fi
 mkdir -p "$ARTIFACTS"
 
 xcodebuild   -project app/Madeira.xcodeproj   -scheme Madeira   -configuration Debug   -destination 'generic/platform=iOS'   -derivedDataPath "$DERIVED"   CODE_SIGNING_ALLOWED=NO   CODE_SIGNING_REQUIRED=NO   build
