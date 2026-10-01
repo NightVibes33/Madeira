@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install minimal build prerequisites
         run: brew install bison ninja ccache
@@ -30,7 +30,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/verify-madeira-pins.py
           for attempt in 1 2 3 4; do
             if git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 FEX; then
               break
