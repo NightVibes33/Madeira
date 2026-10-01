@@ -21,33 +21,39 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Read current Valve Steam client manifest
+      - name: Read Valve manifest and fetch payload builder
         id: steam-manifest
         shell: pwsh
+        env:
+          STEAMIOS_REPOSITORY: ${{ github.repository }}
+          STEAMIOS_COMMIT: ${{ github.sha }}
         run: |
           $ProgressPreference = "SilentlyContinue"
           $manifest = Join-Path $env:RUNNER_TEMP "steam_client_win64"
           Invoke-WebRequest -UseBasicParsing -Uri "https://client-update.akamai.steamstatic.com/steam_client_win64" -OutFile $manifest
           $sha = (Get-FileHash -Algorithm SHA256 $manifest).Hash.ToLowerInvariant()
+
+          $builder = Join-Path $env:RUNNER_TEMP "build-steam-payload.ps1"
+          $builderUrl = "https://raw.githubusercontent.com/$($env:STEAMIOS_REPOSITORY)/$($env:STEAMIOS_COMMIT)/build/steamos-ios/build-steam-payload.ps1"
+          Invoke-WebRequest -UseBasicParsing -Uri $builderUrl -OutFile $builder
+          $builderSha = (Get-FileHash -Algorithm SHA256 $builder).Hash.ToLowerInvariant()
+
           "sha256=$sha" >> $env:GITHUB_OUTPUT
-          Write-Host "STEAMIOS_VALVE_MANIFEST_OK sha256=$sha"
+          "builder_sha256=$builderSha" >> $env:GITHUB_OUTPUT
+          Write-Host "STEAMIOS_VALVE_MANIFEST_OK sha256=$sha builder=$builderSha"
 
       - name: Restore preinstalled Steam client cache
         id: steam-client-cache
         uses: actions/cache@v4
         with:
           path: steam-payload-cache
-          key: steamios-full-steam-v2-${{ steps.steam-manifest.outputs.sha256 }}-${{ hashFiles('build/steamos-ios/build-steam-payload.ps1') }}
+          key: steamios-full-steam-v3-${{ steps.steam-manifest.outputs.sha256 }}-${{ steps.steam-manifest.outputs.builder_sha256 }}
 
       - name: Assemble full Steam client on Windows
         if: steps.steam-client-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          ./build/steamos-ios/build-steam-payload.ps1 `
+          & "$env:RUNNER_TEMP\build-steam-payload.ps1" `
             -OutputDir "$env:GITHUB_WORKSPACE\steam-payload-cache" `
             -ManifestPath "$env:RUNNER_TEMP\steam_client_win64"
 
@@ -98,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Download preinstalled Windows Steam client
         uses: actions/download-artifact@v4
