@@ -304,6 +304,24 @@ jobs:
             app/Madeira/libdxmt_combined.a
           key: steamios-dxmt-ios-xcode27-v1-${{ steps.cache-keys.outputs.dxmt }}
 
+      - name: Bootstrap split caches from legacy runtime cache
+        if: steps.native-deps-cache.outputs.cache-hit != 'true' && steps.fex-cache.outputs.cache-hit != 'true' && steps.llvm-cache.outputs.cache-hit != 'true' && steps.dxmt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ccache
+            FEX/build-arm64ec
+            FEX/build-wow64
+            wine/build-macos
+            wine/build-i386
+            toolchains/gnutls-ios
+            build/freetype-ios/build
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: steamios-runtime-bootstrap-v1-${{ github.sha }}
+          restore-keys: |
+            steamios-runtime-xcode27-v5-
+
       - name: Restore Xcode incremental intermediates
         uses: actions/cache@v4
         with:
