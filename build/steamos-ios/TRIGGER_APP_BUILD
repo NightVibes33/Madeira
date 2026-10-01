@@ -1,2 +1,2 @@
-trigger=steamios-real-big-picture-bootstrap-20261001-v9
-purpose=arm64ec-loader-image-map-dedup-compile-safe
+trigger=steamios-fast-component-cache-20261001-v1
+purpose=build-loader-dedup-with-split-caches-and-apfs-packaging
