@@ -98,7 +98,7 @@ jobs:
           echo "STEAMIOS_FEX_RELOCS_NEAR_END"
 
           readobj="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-readobj"
-          dwarfdump="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-dwarfdump"
+          dwarfdump="$(xcrun --find dwarfdump)"
           test -x "$readobj"
           test -x "$dwarfdump"
 
@@ -158,6 +158,7 @@ jobs:
           echo "STEAMIOS_FEX_SYMBOLICATION_COMPLETE"
 
       - name: Upload isolated ARM64EC translator
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SteamIOS-FEX-ARM64EC-symbol
