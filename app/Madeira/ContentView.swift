@@ -2736,10 +2736,19 @@ struct ContentView: View {
         setenv("STEAMOS_IOS_PRODUCT", "1", 1)
         setenv("STEAMIOS_RUNTIME_PROFILE", "steam", 1)
         setenv("STEAMIOS_WARM_BOOT_TARGET_MS", "5000", 1)
-        // The failing trace parks Steam's loader in Darwin __ulock_wait2 while
-        // madsync is enabled, before any x64->EC transition. Use wineserver
-        // synchronization for Steam bootstrap until madsync is proven correct.
+        // Steam bootstrap uses the server synchronisation baseline. Keep both
+        // optional in-process engines off until the real client is rendering.
         setenv("MADEIRA_INPROC_SYNC", "0", 1)
+        setenv("MADEIRA_FASTSYNC", "0", 1)
+
+        // The pinned ARM64EC Wine loader has an iOS guard for a loader/FEX
+        // re-entrancy deadlock: NotifyImageMap inserts executable intervals;
+        // that insertion may allocate, which re-enters the memory notification
+        // path and tries to acquire the same FEX interval lock. On-device the
+        // only steam.exe thread then parks forever in __ulock_wait2 before any
+        // Steam window is created. Mirror the syscall-notification boundary and
+        // suppress that recursive notification while the image-map callback runs.
+        setenv("MADEIRA_IMAGE_MAP_GUARD", "1", 1)
         setenv("MADEIRA_SCREEN_W", String(deskW), 1)
         setenv("MADEIRA_SCREEN_H", String(deskH), 1)
         setenv("STEAMOS_IOS_TOUCHSCREEN", "1", 1)

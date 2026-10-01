@@ -21,7 +21,12 @@
       "jitless": true
     },
     "prefix": "single persistent Windows machine",
-    "app_identity": "Steam is authoritative for child AppID"
+    "app_identity": "Steam is authoritative for child AppID",
+    "synchronization": {
+      "madsync": false,
+      "fastsync": false,
+      "arm64ec_loader_image_map_guard": true
+    }
   },
   "startup": {
     "target_first_real_big_picture_frame_ms": 5000,

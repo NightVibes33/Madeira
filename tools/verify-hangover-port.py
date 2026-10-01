@@ -65,7 +65,10 @@ def main() -> int:
          ".steamios-runtime-ready-v2", '\\"Version\\"=\\"win11\\"')
     need("app/Madeira/ContentView.swift",
          "[boot-budget]", "STEAMIOS_WARM_BOOT_TARGET_MS",
-         "STEAMIOS_RUNTIME_PROFILE", "first verified Big Picture frame")
+         "STEAMIOS_RUNTIME_PROFILE", "first verified Big Picture frame",
+         'setenv("MADEIRA_INPROC_SYNC", "0", 1)',
+         'setenv("MADEIRA_FASTSYNC", "0", 1)',
+         'setenv("MADEIRA_IMAGE_MAP_GUARD", "1", 1)')
     need("app/Madeira/GamepadInput.swift",
          "GCController.startWirelessControllerDiscovery", "wireless/Bluetooth",
          "SteamIOSControllerHaptics", "CoreHaptics", "battery.batteryLevel",
@@ -125,6 +128,8 @@ def main() -> int:
         need("wine/dlls/wow64/syscall.c",
              "STEAMIOS_HANGOVER_PORT_V1", "HODLL", "libwow64fex.dll")
         need("wine/dlls/ntdll/version.c", "VersionData[WIN11]", "10, 0, 26100")
+        need("wine/dlls/ntdll/signal_arm64ec.c",
+             "MADEIRA_IMAGE_MAP_GUARD", "enter_syscall_callback", "pNotifyImageMap")
         need("wine/loader/wine.inf.in", "Windows 11 Pro", "26100")
         need("wine/include/ntuser.h",
              "STEAMIOS_GAMEPAD_TELEMETRY_V1",
