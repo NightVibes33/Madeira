@@ -1,2 +1,2 @@
-trigger=steamios-real-big-picture-bootstrap-20261001-v7
-purpose=arm64ec-loader-image-map-self-deadlock-guard
+trigger=steamios-real-big-picture-bootstrap-20261001-v8
+purpose=arm64ec-loader-image-map-dedup-after-syscall-registration
