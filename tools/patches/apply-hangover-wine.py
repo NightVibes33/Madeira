@@ -178,6 +178,37 @@ static DWORD steamios_wow64_get_environment_variable_w( LPCWSTR name, LPWSTR val
 
 
 
+LOADER_IMAGE_NOTIFY_MARKER = "STEAMIOS_LOADER_NOTIFY_DEDUP_V1"
+
+def patch_arm64ec_loader_notify(path: Path) -> None:
+    s = path.read_text()
+    if LOADER_IMAGE_NOTIFY_MARKER in s:
+        return
+
+    old = """    if (guard == 2) entered = enter_syscall_callback();
+    pNotifyImageMap( base );
+    if (entered) leave_syscall_callback();
+"""
+    new = """    /* STEAMIOS_LOADER_NOTIFY_DEDUP_V1
+     * On iOS the successful NtMapViewOfSection path is authoritative and has
+     * already registered executable sections with FEX before the loader reaches
+     * this semantic callback. Re-registering the same image can park the ARM64EC
+     * loader inside FEX's interval synchronization (observed on Steam's first
+     * sechost.dll map). When the SteamIOS guard is enabled, suppress this
+     * duplicate loader-side registration entirely. */
+    if (guard == 2)
+    {
+        ERR( "[ldr-image] ml1145 SKIP duplicate loader registration base=%p peb=%p\\n",
+             base, RtlGetCurrentPeb() );
+        return;
+    }
+
+    pNotifyImageMap( base );
+"""
+    s = replace_once(s, old, new, "ARM64EC loader image-map dedup")
+    path.write_text(s)
+
+
 GAMEPAD_MARKER = "STEAMIOS_GAMEPAD_TELEMETRY_V1"
 
 
@@ -287,8 +318,9 @@ def main() -> int:
     wine_inf = wine / "loader/wine.inf.in"
     ntuser = wine / "include/ntuser.h"
     xinput = wine / "dlls/xinput1_3/main.c"
+    signal_arm64ec = wine / "dlls/ntdll/signal_arm64ec.c"
 
-    for p in (loader, wow64, version_c, wine_inf, ntuser, xinput):
+    for p in (loader, wow64, version_c, wine_inf, ntuser, xinput, signal_arm64ec):
         if not p.is_file():
             raise SystemExit(f"missing Wine source: {p}")
 
@@ -296,6 +328,7 @@ def main() -> int:
     patch_wow64(wow64)
     patch_windows11(version_c, wine_inf)
     patch_gamepad_bridge(ntuser, xinput)
+    patch_arm64ec_loader_notify(signal_arm64ec)
 
     checks = {
         loader: ["HODLL64", "libarm64ecfex.dll", MARKER,
@@ -306,6 +339,8 @@ def main() -> int:
         wine_inf: ['"Windows 11 Pro"', '"26100"', MARKER],
         ntuser: ["NtUserGamepadOp_Vibration", "NtUserGamepadOp_Battery", GAMEPAD_MARKER],
         xinput: ["NtUserGamepadOp_Vibration", "NtUserGamepadOp_Battery", GAMEPAD_MARKER],
+        signal_arm64ec: [LOADER_IMAGE_NOTIFY_MARKER, "ml1145 SKIP duplicate loader registration",
+                         "MADEIRA_IMAGE_MAP_GUARD"],
     }
     for p, needles in checks.items():
         content = p.read_text()
