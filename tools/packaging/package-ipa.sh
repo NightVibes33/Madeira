@@ -19,7 +19,12 @@ BUNDLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/Payload"
-ditto "$APP" "$TMP/Payload/$(basename "$APP")"
+if /bin/cp -cR "$APP" "$TMP/Payload/$(basename "$APP")" 2>/dev/null; then
+  echo "STEAMIOS_IPA_STAGE_APFS_CLONE_OK"
+else
+  ditto "$APP" "$TMP/Payload/$(basename "$APP")"
+  echo "STEAMIOS_IPA_STAGE_DITTO_FALLBACK"
+fi
 (
   cd "$TMP"
   /usr/bin/zip -qry "$OUT" Payload
