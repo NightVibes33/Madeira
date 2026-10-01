@@ -93,7 +93,16 @@ def main() -> int:
     wine_build_pos = workflow.find("Configure Wine host headers")
     if overlay_pos < 0 or wine_build_pos < 0 or overlay_pos > wine_build_pos:
         raise SystemExit("HANGOVER_PORT_FAIL app workflow must transform Wine before any Wine build")
-    for cache_tag in ("steamios-i386-farm-xcode27-v2", "steamios-runtime-xcode27-v5"):
+    for cache_tag in (
+        "steamios-native-deps-xcode27-v1",
+        "steamios-fex-xcode27-v1",
+        "steamios-i386-farm-xcode27-v3",
+        "steamios-wine-runtime-xcode27-v1",
+        "steamios-llvm-ios-xcode27-v1",
+        "steamios-dxmt-ios-xcode27-v1",
+        # Retained only as the one-time migration source for the split caches.
+        "steamios-runtime-xcode27-v5",
+    ):
         if cache_tag not in workflow:
             raise SystemExit(f"HANGOVER_PORT_FAIL cache discriminator missing: {cache_tag}")
 
