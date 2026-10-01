@@ -10,15 +10,15 @@ cpp_path = Path(sys.argv[2])
 header = header_path.read_text()
 cpp = cpp_path.read_text()
 
-HEADER_MARKER = "iOS-Madeira ml1141: re-entrant-safe interval RW lock"
-CPP_MARKER = "iOS-Madeira ml1142: token-scoped recursive interval writer"
+HEADER_MARKER = "iOS-Madeira ml1144: re-entrant-safe interval RW lock"
+CPP_MARKER = "iOS-Madeira ml1145: token-scoped recursive interval writer"
 
 include_old = "#include <FEXCore/Utils/IntervalList.h>\n#include <FEXCore/HLE/SyscallHandler.h>\n"
 include_new = "#include <FEXCore/Utils/IntervalList.h>\n#include <FEXCore/HLE/SyscallHandler.h>\n#include <FEXCore/Utils/WritePriorityMutex.h>\n"
 
 field_old = "  std::shared_mutex IntervalsLock;\n"
 field_new = """#ifdef FEX_IOS_HOST
-  /* iOS-Madeira ml1141: re-entrant-safe interval RW lock.
+  /* iOS-Madeira ml1144: re-entrant-safe interval RW lock.
    *
    * The Steam startup freeze was symbolicated to InvalidationTracker + 0x38.
    * With LLVM 23.1.2 libc++/Win64, the two IntervalList vectors occupy 0x30
@@ -51,7 +51,7 @@ if HEADER_MARKER not in header:
 guard_anchor = "namespace FEX::Windows {\n"
 guard_new = """namespace FEX::Windows {
 
-/* iOS-Madeira ml1142: token-scoped recursive interval writer.
+/* iOS-Madeira ml1145: token-scoped recursive interval writer.
  *
  * WritePriorityMutex intentionally does not make lock() recursively writable:
  * doing that globally previously leaked nesting through try_lock()/lock()
