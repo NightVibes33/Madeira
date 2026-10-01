@@ -134,8 +134,12 @@ jobs:
           grep -F 'setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)' app/Madeira/ContentView.swift
           grep -F 'CreateProcessW' build/steamios-launcher/steamios-launcher.c
           grep -F 'services.exe' build/steamios-launcher/steamios-launcher.c
-          grep -F -- '-bigpicture' build/steamios-launcher/steamios-launcher.c
+          grep -F -- '-gamepadui' build/steamios-launcher/steamios-launcher.c
           grep -F '.steamios-steam-launched' build/steamios-launcher/steamios-launcher.c
+          ! grep -F -- ' -console' build/steamios-launcher/steamios-launcher.c
+          grep -F 'private var steamLaunchSurface' app/Madeira/ContentView.swift
+          grep -F 'Text("Starting Big Picture")' app/Madeira/ContentView.swift
+          grep -F 'Atomic product handoff' app/Madeira/ContentView.swift
           ! grep -F 'steam-launch.bat' app/Madeira/ContentView.swift
           grep -F 'winios_set_product_visible(0)' app/Madeira/ContentView.swift
           grep -F 'winios_set_product_visible(steamSettingsPresented ? 0 : 1)' app/Madeira/ContentView.swift
@@ -172,7 +176,7 @@ jobs:
           grep -F 'winios_window_identity' build/win32u-unix/driver_ios.c
           grep -F 'winios_is_steam_window(hwnd)' app/Madeira/Winios/Winios.m
           grep -F 'setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)' app/Madeira/ContentView.swift
-          grep -F -- '-bigpicture' build/steamios-launcher/steamios-launcher.c
+          grep -F -- '-gamepadui' build/steamios-launcher/steamios-launcher.c
           ! grep -F 'steam-launch.bat' app/Madeira/ContentView.swift
           grep -F 'MADEIRA_JITLESS' app/Madeira/ContentView.swift
           ! grep -F 'SteamSetup.exe /S' app/Madeira/ContentView.swift

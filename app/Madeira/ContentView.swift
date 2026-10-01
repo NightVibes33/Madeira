@@ -1202,26 +1202,32 @@ struct ContentView: View {
                     winios_get_surface_present_count() > compositorBaseline
                 guard steamPresented, SteamIOSOrientation.isLandscape else { return }
 
-                productState = .running
+                // Atomic product handoff: make the verified Steam frame visible
+                // before removing the native Steam boot surface. There must never
+                // be a frame where both surfaces are absent/transparent.
                 MetalBackedView.refreshPresentationGeometry()
-                TouchControlsHost.setHidden(steamSettingsPresented)
-                TouchControlsHost.attach()
                 MetalHostView.shared.isHidden = steamSettingsPresented
                 winios_set_product_visible(steamSettingsPresented ? 0 : 1)
-                UIView.animate(withDuration: 0.20) {
-                    MetalHostView.shared.alpha = 1
-                }
+                MetalHostView.shared.alpha = 1
+                productState = .running
+                TouchControlsHost.setHidden(steamSettingsPresented)
+                TouchControlsHost.attach()
             }
     }
 
-    /// Shipping product root. Startup is intentionally chrome-free: after JIT
-    /// returns, the next user-visible surface is Steam itself. Internal JIT/Wine
-    /// state stays in the Files-visible diagnostic log instead of a "Starting
-    /// Steam" interstitial.
+    /// Shipping product root. JIT/Wine internals are never user-visible.
+    /// Until Steam has produced a verified frame, an opaque Steam boot surface
+    /// owns every pixel; the first real Big Picture frame replaces it atomically.
     private var steamProductBody: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            SteamLaunchPalette.deep
+                .ignoresSafeArea()
             MadeiraMetalView().ignoresSafeArea()
+
+            if productState == .startingJIT || productState == .launchingSteam {
+                steamLaunchSurface
+                    .zIndex(20)
+            }
 
             if case .failed(let message) = productState {
                 VStack(spacing: 14) {
@@ -1254,10 +1260,64 @@ struct ContentView: View {
                     }
                 }
                 .padding(24)
+                .zIndex(30)
             }
         }
-        .background(Color.black)
+        .background(SteamLaunchPalette.deep)
         .ignoresSafeArea()
+    }
+
+    private enum SteamLaunchPalette {
+        static let deep = Color(red: 0.015, green: 0.055, blue: 0.090)
+        static let blue = Color(red: 0.055, green: 0.160, blue: 0.255)
+    }
+
+    /// Immediate product-facing boot view. This is intentionally not a JIT,
+    /// Wine, command-window, or diagnostic screen.
+    private var steamLaunchSurface: some View {
+        ZStack {
+            LinearGradient(
+                colors: [SteamLaunchPalette.blue, SteamLaunchPalette.deep],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 13) {
+                ZStack {
+                    Circle()
+                        .stroke(.white.opacity(0.95), lineWidth: 4)
+                        .frame(width: 62, height: 62)
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 18, height: 18)
+                        .offset(x: 13, y: -10)
+                    Capsule()
+                        .fill(.white)
+                        .frame(width: 34, height: 7)
+                        .rotationEffect(.degrees(-32))
+                        .offset(x: -9, y: 10)
+                }
+                .accessibilityHidden(true)
+
+                Text("STEAM")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .tracking(4.5)
+                    .foregroundStyle(.white)
+
+                Text("Starting Big Picture")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.78))
+
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .padding(.top, 2)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Steam. Starting Big Picture.")
     }
 
     private var failureLogTail: String {
@@ -1302,10 +1362,14 @@ struct ContentView: View {
         didStartSteamProduct = true
         productState = .startingJIT
         steamProcessObserved = false
-        steamLandscapeRequested = false
+        steamLandscapeRequested = true
         presentBaseline = Int(madeira_get_present_count())
         compositorBaseline = winios_get_surface_present_count()
         try? FileManager.default.removeItem(at: steamLaunchMarkerURL())
+
+        // Rotate immediately, in parallel with JIT/prefix preparation, so the
+        // first visible product frame is already in the Big Picture geometry.
+        SteamIOSOrientation.requestLandscape(log: logStore)
         MetalHostView.shared.alpha = 0
         MetalHostView.shared.isHidden = false
         winios_set_product_visible(0)
@@ -1349,9 +1413,12 @@ struct ContentView: View {
         let deskH = steamSize.height
         logStore.log("Steam auto-start display target: \(deskW)x\(deskH)")
         productState = .launchingSteam
-        // Rotate while startup is still black; never expose portrait Wine UI.
-        steamLandscapeRequested = true
-        SteamIOSOrientation.requestLandscape(log: logStore)
+        // startSteamAutomatically() already requested landscape before JIT.
+        // Keep this as a recovery path for retries/lifecycle races only.
+        if !steamLandscapeRequested {
+            steamLandscapeRequested = true
+            SteamIOSOrientation.requestLandscape(log: logStore)
+        }
 
         // The complete Valve Win64 client ships inside prefix-template.tar.gz.
         // Prefix extraction/legacy-prefix repair is filesystem work only; run it

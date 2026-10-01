@@ -35,8 +35,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         L"C:\\Program Files (x86)\\Steam\\steam.exe",
         L"C:\\Program Files\\Steam\\steam.exe"
     };
+    /* Product launch: go directly to Steam's controller-first UI. Keep CEF
+     * software compositing for the currently proven Madeira login/Big Picture
+     * path, but never create Steam's developer console window. */
     static const wchar_t args[] =
-        L" -bigpicture -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor"
+        L" -gamepadui -no-cef-sandbox -cef-disable-gpu -nocrashmonitor"
         L" -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints";
     const wchar_t *steam = NULL;
     wchar_t cwd[MAX_PATH], cmd[2048];
