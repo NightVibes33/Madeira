@@ -1,2 +1,2 @@
-trigger=steamios-fex-lock-prefix-fast-20260930-v1
-purpose=fix-steam-arm64ec-invalidationtracker-self-deadlock-and-skip-repeat-prefix-seeding
+trigger=steamios-fex-unlocked-protect-apfs-steam-20260930-v2
+purpose=compile-verified-fex-invalidation-lock-fix-plus-apfs-first-launch-steam-clone

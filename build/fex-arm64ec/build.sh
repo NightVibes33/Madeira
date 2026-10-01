@@ -17,11 +17,8 @@ if ! grep -q '^#include <cstdlib>' "$STRING_CONV"; then
     git -C "$R/FEX" apply "$PATCH"
 fi
 
-LOCK_PATCH="$R/tools/patches/fex-arm64ec-interval-lock.patch"
 INVALIDATION_TRACKER="$R/FEX/Source/Windows/Common/InvalidationTracker.cpp"
-if ! grep -q 'ml1140: NEVER call NtProtectVirtualMemory while holding' "$INVALIDATION_TRACKER"; then
-    git -C "$R/FEX" apply "$LOCK_PATCH"
-fi
+python3 "$R/tools/patches/apply-fex-invalidation-lock.py" "$INVALIDATION_TRACKER"
 grep -q '\[iOS-xlock\] ml1140' "$INVALIDATION_TRACKER" || {
     echo "error: FEX iOS interval-lock fix was not applied" >&2
     exit 1

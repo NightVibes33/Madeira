@@ -142,11 +142,12 @@ jobs:
           grep -F '[x18-xzr-recover] ml1137' build/ntdll-unix/signal_arm64_ios.c
           grep -F 'ml1138: MOV XZR, X18 is a semantic no-op' build/ntdll-unix/virtual_ios.c
           grep -F 'if (rd == 31)' build/ntdll-unix/virtual_ios.c
-          test -s tools/patches/fex-arm64ec-interval-lock.patch
-          grep -F 'fex-arm64ec-interval-lock.patch' build/fex-arm64ec/build.sh
-          grep -F 'fex-arm64ec-interval-lock.patch' build/fex-wow64/build.sh
-          grep -F 'ml1140: NEVER call NtProtectVirtualMemory while holding' tools/patches/fex-arm64ec-interval-lock.patch
-          grep -F '[iOS-xlock] ml1140' tools/patches/fex-arm64ec-interval-lock.patch
+          test -s tools/patches/apply-fex-invalidation-lock.py
+          grep -F 'apply-fex-invalidation-lock.py' build/fex-arm64ec/build.sh
+          grep -F 'apply-fex-invalidation-lock.py' build/fex-wow64/build.sh
+          grep -F 'FEX_IOS_INTERVAL_LOCK_PATCH_REFUSED' tools/patches/apply-fex-invalidation-lock.py
+          grep -F 'ml1140: NEVER call NtProtectVirtualMemory while holding' tools/patches/apply-fex-invalidation-lock.py
+          grep -F '[iOS-xlock] ml1140' tools/patches/apply-fex-invalidation-lock.py
           grep -F '.steamios-runtime-ready-v1' app/Madeira/WineProcessBridge.m
           grep -F '[prefix-fast] ml1141 READY' app/Madeira/WineProcessBridge.m
           grep -F '[prefix-clone] ml1142' app/Madeira/WineProcessBridge.m

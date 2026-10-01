@@ -56,12 +56,14 @@ require("[x18-xzr-recover] ml1137", SIGNAL, "malformed x18/XZR trampoline recove
 require("ml1138: MOV XZR, X18 is a semantic no-op", VIRTUAL,
         "x18 patcher register-31 generation fix")
 require("if (rd == 31)", VIRTUAL, "x18 patcher must never emit an SP-based TSD load for XZR")
-FEX_LOCK_PATCH = (ROOT / "tools/patches/fex-arm64ec-interval-lock.patch").read_text()
-require("ml1140: NEVER call NtProtectVirtualMemory while holding", FEX_LOCK_PATCH,
+FEX_LOCK_PATCHER = (ROOT / "tools/patches/apply-fex-invalidation-lock.py").read_text()
+require("FEX_IOS_INTERVAL_LOCK_PATCH_REFUSED", FEX_LOCK_PATCHER,
+        "FEX lock transformer must fail closed on source drift")
+require("ml1140: NEVER call NtProtectVirtualMemory while holding", FEX_LOCK_PATCHER,
         "FEX invalidation tracker must not hold its mutex across NtProtectVirtualMemory")
-require("[iOS-xlock] ml1140", FEX_LOCK_PATCH, "FEX unlocked-protection diagnostic")
-require("fex-arm64ec-interval-lock.patch",
-        (ROOT / "build/fex-arm64ec/build.sh").read_text(), "ARM64EC FEX lock patch application")
+require("[iOS-xlock] ml1140", FEX_LOCK_PATCHER, "FEX unlocked-protection diagnostic")
+require("apply-fex-invalidation-lock.py",
+        (ROOT / "build/fex-arm64ec/build.sh").read_text(), "ARM64EC FEX lock transformer")
 require(".steamios-runtime-ready-v1", WINE, "constant-time seeded-prefix marker")
 require("[prefix-fast] ml1141 READY", WINE, "constant-time prefix fast path")
 require("[prefix-clone] ml1142", WINE, "APFS-cloned first-install Steam materialization")
