@@ -10,83 +10,91 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: steamios-fex-symbolicate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   symbolicate:
     runs-on: xcode-27
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Restore pinned source toolchain
-        id: source-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            toolchains/llvm-mingw-20260922-ucrt-macos-universal
-            toolchains/llvm-mingw-20260922-ucrt-macos-universal.tar.xz
-            toolchains/llvm-project
-            research/freetype
-          key: steamios-sources-xcode27-v2-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-freetype.sh', 'tools/runtime-deps/fetch-llvm-project.sh') }}
+      - name: Install minimal build prerequisites
+        run: brew install bison ninja ccache
 
-      - name: Restore compiled ARM64EC runtime
-        id: runtime-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .ccache
-            FEX/build-arm64ec
-            FEX/build-wow64
-            wine/build-macos
-            wine/build-i386
-            toolchains/gnutls-ios
-            build/freetype-ios/build
-            toolchains/llvm-host-build
-            toolchains/llvm-ios-build
-          key: steamios-runtime-xcode27-v5-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/**/*.sh', 'build/wine-pe/**/*.sh', 'build/ntdll-unix/**/*.sh', 'build/win32u-unix/**/*.sh', 'build/llvm-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh') }}
-
-      - name: Symbolicate parked wait address
+      - name: Materialize pinned FEX and ARM64EC toolchain
         shell: bash
         run: |
           set -euo pipefail
-          echo "SOURCE_CACHE=${{ steps.source-cache.outputs.cache-hit }}"
-          echo "RUNTIME_CACHE=${{ steps.runtime-cache.outputs.cache-hit }}"
+          python3 tools/verify-madeira-pins.py
+          for attempt in 1 2 3 4; do
+            if git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 FEX; then
+              break
+            fi
+            [ "$attempt" -lt 4 ] || exit 1
+            sleep $((attempt * 5))
+          done
+          bash tools/bootstrap/fetch-llvm-mingw.sh
+          echo "STEAMIOS_FEX_SYMBOL_SOURCES_READY"
+
+      - name: Build only ARM64EC FEX translator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          PY_VENV="$PWD/build/steamos-python-symbol"
+          rm -rf "$PY_VENV"
+          python3 -m venv "$PY_VENV"
+          "$PY_VENV/bin/python" -m pip install --disable-pip-version-check --quiet 'packaging==24.2'
+          export PATH="$PY_VENV/bin:$PATH"
+          bash build/fex-arm64ec/build.sh
+          test -s FEX/build-arm64ec/Bin/libarm64ecfex.dll
+          echo "STEAMIOS_FEX_SYMBOL_BUILD_READY"
+
+      - name: Resolve parked wait address
+        shell: bash
+        run: |
+          set -euo pipefail
           dll="$PWD/FEX/build-arm64ec/Bin/libarm64ecfex.dll"
           nm="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-nm"
           objdump="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-objdump"
           test -s "$dll"
           test -x "$nm"
           test -x "$objdump"
-          target=0x3beba8
-          echo "STEAMIOS_FEX_STALL_RVA=$target"
+          target=0x1803beba8
+          echo "STEAMIOS_FEX_STALL_RVA=0x3beba8"
+          echo "STEAMIOS_FEX_STALL_PE_VA=$target"
           "$nm" -n -C --defined-only "$dll" > "$RUNNER_TEMP/fex.nm"
           python3 - "$RUNNER_TEMP/fex.nm" <<'PY'
           import re, sys
-          target=0x3beba8
+          target=0x1803beba8
           rows=[]
           for line in open(sys.argv[1], errors="replace"):
               m=re.match(r"^([0-9A-Fa-f]+)\\s+([A-Za-z?])\\s+(.*)$", line.rstrip())
               if m:
                   rows.append((int(m.group(1),16),m.group(2),m.group(3)))
           rows.sort()
-          before=[r for r in rows if r[0] <= target][-20:]
-          after=[r for r in rows if r[0] > target][:20]
+          before=[r for r in rows if r[0] <= target][-32:]
+          after=[r for r in rows if r[0] > target][:32]
           print("STEAMIOS_FEX_SYMBOL_WINDOW_BEGIN")
           for addr,typ,name in before+after:
-              print(f"{addr:08x} {typ} {name} delta={target-addr:+#x}")
-          nearest=max((r for r in rows if r[0] <= target), key=lambda r:r[0], default=None)
+              print(f"{addr:016x} {typ} {name} delta={target-addr:+#x}")
+          nearest=max((r for r in rows if r[0] <= target),key=lambda r:r[0],default=None)
           if nearest:
               print(f"STEAMIOS_FEX_STALL_NEAREST addr=0x{nearest[0]:x} delta=0x{target-nearest[0]:x} type={nearest[1]} symbol={nearest[2]}")
+          exact=[r for r in rows if r[0] == target]
+          for r in exact:
+              print(f"STEAMIOS_FEX_STALL_EXACT type={r[1]} symbol={r[2]}")
           print("STEAMIOS_FEX_SYMBOL_WINDOW_END")
           PY
           echo "STEAMIOS_FEX_SECTIONS_BEGIN"
           "$objdump" -h "$dll"
           echo "STEAMIOS_FEX_SECTIONS_END"
-          echo "STEAMIOS_FEX_DATA_SYMBOLS_NEAR_BEGIN"
-          "$nm" -n -C --defined-only "$dll" | awk '
-            /^[0-9A-Fa-f]+ [BbDdRrSsVvWw] / {
-              a=("0x"$1)+0;
-              if (a >= 0x3b0000 && a <= 0x3c8000) print
-            }'
-          echo "STEAMIOS_FEX_DATA_SYMBOLS_NEAR_END"
+          echo "STEAMIOS_FEX_RELOCS_NEAR_BEGIN"
+          "$objdump" -r "$dll" | grep -Ei '1803be[0-9a-f]{3}|3be[0-9a-f]{3}' || true
+          echo "STEAMIOS_FEX_RELOCS_NEAR_END"
+          echo "STEAMIOS_FEX_SYMBOLICATION_COMPLETE"
