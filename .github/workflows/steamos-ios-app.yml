@@ -1,11 +1,15 @@
 name: SteamIOS clean app + IPA
 
 on:
+  workflow_dispatch:
   push:
     branches: [steamios-fex-lock-diagnosis]
     paths:
       - ".github/workflows/steamos-ios-app.yml"
-  workflow_dispatch:
+      - "build/steamos-ios/TRIGGER_APP_BUILD"
+      - "build/fex-arm64ec/build.sh"
+      - "tools/patches/apply-fex-interval-mutex.py"
+      - "tools/patches/apply-fex-invalidation-lock.py"
 
 permissions:
   contents: read
@@ -15,7 +19,342 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  diagnosis-hold:
-    runs-on: ubuntu-latest
+  steam-payload:
+    name: assemble preinstalled Windows Steam client
+    runs-on: windows-latest
+    timeout-minutes: 25
     steps:
-      - run: echo "STEAMIOS_DIAGNOSIS_APP_BUILD_SUPPRESSED"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read current Valve Steam client manifest
+        id: steam-manifest
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $manifest = Join-Path $env:RUNNER_TEMP "steam_client_win64"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://client-update.akamai.steamstatic.com/steam_client_win64" -OutFile $manifest
+          $sha = (Get-FileHash -Algorithm SHA256 $manifest).Hash.ToLowerInvariant()
+          "sha256=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "STEAMIOS_VALVE_MANIFEST_OK sha256=$sha"
+
+      - name: Restore preinstalled Steam client cache
+        id: steam-client-cache
+        uses: actions/cache@v4
+        with:
+          path: steam-payload-cache
+          key: steamios-full-steam-v2-${{ steps.steam-manifest.outputs.sha256 }}-${{ hashFiles('build/steamos-ios/build-steam-payload.ps1') }}
+
+      - name: Assemble full Steam client on Windows
+        if: steps.steam-client-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          ./build/steamos-ios/build-steam-payload.ps1 `
+            -OutputDir "$env:GITHUB_WORKSPACE\steam-payload-cache" `
+            -ManifestPath "$env:RUNNER_TEMP\steam_client_win64"
+
+      - name: Verify preinstalled Steam payload
+        shell: pwsh
+        run: |
+          $payload = "steam-payload-cache\SteamPayload.tar.gz"
+          $meta = "steam-payload-cache\SteamPayload.json"
+          if (-not (Test-Path $payload)) { throw "SteamPayload.tar.gz missing" }
+          if (-not (Test-Path $meta)) { throw "SteamPayload.json missing" }
+          $entries = (& tar.exe -tzf $payload) -replace '\\','/'
+          foreach ($required in @(
+            "Steam/steam.exe",
+            "Steam/steamclient.dll",
+            "Steam/steamclient64.dll",
+            "Steam/steamui.dll",
+            "Steam/bin/cef/cef.win7x64/steamwebhelper.exe"
+          )) {
+            if ($entries -notcontains $required) { throw "Steam payload missing $required" }
+          }
+          if (($entries -notcontains "Steam/package/steam_client_win64.installed") -and
+              ($entries -notcontains "Steam/package/steam_client_win32.installed")) {
+            throw "Steam payload has no installed client manifest"
+          }
+          Write-Host "STEAMIOS_FULL_STEAM_ARCHIVE_GATE_OK"
+
+      - name: Upload preinstalled Steam payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-Windows-Steam
+          path: |
+            steam-payload-cache/SteamPayload.tar.gz
+            steam-payload-cache/SteamPayload.json
+          if-no-files-found: error
+          compression-level: 0
+
+  clean-app:
+    name: clean Debug iPhoneOS app and IPA
+    needs: steam-payload
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download preinstalled Windows Steam client
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamIOS-Windows-Steam
+          path: build/steamos-steam-payload
+
+      - name: Restore pinned source/toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal.tar.xz
+            toolchains/llvm-project
+            research/freetype
+          key: steamios-sources-xcode27-v2-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-freetype.sh', 'tools/runtime-deps/fetch-llvm-project.sh') }}
+
+      - name: Install host build prerequisites
+        run: brew install bison ccache ninja meson sevenzip
+
+      - name: Verify Xcode 27 and install Metal Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          [[ "$sdk" == 27.* ]]
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+          echo "CLEAN_APP_TOOLCHAIN_OK sdk=$sdk"
+
+      - name: Materialize pinned sources and toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-madeira-pins.py
+
+          retry_cmd() {
+            local label="$1"; shift
+            local attempt
+            for attempt in 1 2 3 4; do
+              if "$@"; then
+                echo "STEAMOS_IOS_SUBMODULE_RETRY_OK label=$label attempt=$attempt"
+                return 0
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "error: $label failed after $attempt attempts" >&2
+                return 1
+              fi
+              echo "warning: $label fetch failed on attempt $attempt; retrying pinned commit" >&2
+              sleep $((attempt * 10))
+            done
+          }
+
+          retry_cmd FEX git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 FEX
+          retry_cmd wine git -c http.version=HTTP/1.1 submodule update --init --depth 1 wine
+          retry_cmd dxmt git -c http.version=HTTP/1.1 submodule update --init --depth 1 research/dxmt
+          retry_cmd directx git -C research/dxmt -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 include/native/directx
+
+          # The workflow builds Wine before build-clean-app.sh and later calls
+          # that script with STEAMOS_SKIP_NATIVE_REBUILD=1. Apply the
+          # Hangover boundary patch here, before ANY Wine configure/build.
+          python3 tools/patches/apply-hangover-wine.py "$PWD/wine"
+          grep -F 'STEAMIOS_HANGOVER_PORT_V1' wine/dlls/ntdll/loader.c
+          grep -F 'STEAMIOS_HANGOVER_PORT_V1' wine/dlls/wow64/syscall.c
+          grep -F 'VersionData[WIN11]' wine/dlls/ntdll/version.c
+          python3 tools/verify-hangover-port.py --materialized
+          echo "STEAMOS_HANGOVER_WINE_SOURCE_READY"
+
+          bash tools/bootstrap/fetch-llvm-mingw.sh
+          bash tools/runtime-deps/fetch-freetype.sh
+          bash tools/runtime-deps/fetch-llvm-project.sh
+          bash tools/runtime-deps/fetch-vcruntime.sh
+          echo "STEAMOS_IOS_BOOTSTRAP_OK"
+
+      - name: Restore completed i386 Wine + DXMT farm
+        id: i386-farm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: app/Madeira/i386-windows
+          key: steamios-i386-farm-xcode27-v2-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'tools/bootstrap/fetch-llvm-mingw.sh', 'build/wine-i386/build.sh') }}
+
+      - name: Restore compiled runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            FEX/build-arm64ec
+            FEX/build-wow64
+            wine/build-macos
+            wine/build-i386
+            toolchains/gnutls-ios
+            build/freetype-ios/build
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: steamios-runtime-xcode27-v5-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/**/*.sh', 'build/wine-pe/**/*.sh', 'build/ntdll-unix/**/*.sh', 'build/win32u-unix/**/*.sh', 'build/llvm-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh') }}
+
+      - name: Configure persistent compiler cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache --set-config=compiler_check="$CCACHE_COMPILERCHECK"
+          ccache --set-config=base_dir="$CCACHE_BASEDIR"
+          ccache --set-config=hash_dir=false
+          ccache --zero-stats
+          ccache --show-config
+          echo "STEAMIOS_CCACHE_READY dir=$CCACHE_DIR"
+
+      - name: Build iOS native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash build/gnutls-ios/build.sh
+          bash build/freetype-ios/build.sh
+          echo "STEAMOS_IOS_NATIVE_DEPS_OK"
+
+      - name: Build FEX Windows translators
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          PY_VENV="$PWD/build/steamos-python"
+          rm -rf "$PY_VENV"
+          python3 -m venv "$PY_VENV"
+          "$PY_VENV/bin/python" -m pip install --disable-pip-version-check --quiet 'packaging==24.2'
+          export PATH="$PY_VENV/bin:$PATH"
+          python3 -c 'from packaging.version import Version; assert Version("24.2") == Version("24.2")'
+          bash build/fex-arm64ec/build.sh
+          bash build/fex-wow64/build.sh
+          bash build/steamios-launcher/build.sh
+          test -s app/Madeira/aarch64-windows/steamios-launcher.exe
+          echo "STEAMOS_IOS_FEX_TRANSLATORS_OK"
+          echo "STEAMOS_IOS_WINDOWLESS_LAUNCHER_BUILT"
+
+      - name: Configure Wine host headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          mkdir -p wine/build-macos
+          if [[ ! -f wine/build-macos/config.status ]]; then
+            (
+              cd wine/build-macos
+              ../configure --without-x --disable-tests
+            )
+          fi
+          echo "STEAMOS_IOS_WINE_HOST_CONFIG_OK"
+
+      - name: Build i386 Wine and DXMT Windows farm
+        if: steps.i386-farm-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wine-i386/build.sh
+
+      - name: Verify completed i386 Wine + DXMT farm
+        shell: bash
+        run: |
+          set -euo pipefail
+          farm="$PWD/app/Madeira/i386-windows"
+          count="$(find "$farm" -maxdepth 1 -type f ! -name '.gitkeep' | wc -l | tr -d ' ')"
+          [ "$count" -ge 500 ] || {
+            echo "error: cached i386 Wine farm incomplete ($count files; expected >=500)" >&2
+            exit 1
+          }
+          for f in             kernel32.dll ntdll.dll user32.dll gdi32.dll advapi32.dll             d3d11.dll dxgi.dll d3d10core.dll winemetal.dll             d3d9.dll d3d9-emulated.dll; do
+            test -s "$farm/$f" || {
+              echo "error: cached i386 Wine/DXMT output missing $f" >&2
+              exit 1
+            }
+          done
+          if [ "${{ steps.i386-farm-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "STEAMIOS_I386_FARM_CACHE_HIT files=$count"
+          else
+            echo "STEAMIOS_I386_FARM_BUILT_AND_VERIFIED files=$count"
+          fi
+
+      - name: Save completed i386 Wine + DXMT farm
+        if: steps.i386-farm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/Madeira/i386-windows
+          key: ${{ steps.i386-farm-cache.outputs.cache-primary-key }}
+
+      - name: Build wineserver and Wine Unix bridges
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wineserver/bootstrap-base.sh
+          bash build/wineserver/build.sh all
+          bash build/wine-pe/build-ntdll.sh
+          bash build/ntdll-unix/build.sh
+          bash build/win32u-unix/build.sh
+          echo "STEAMOS_IOS_WINE_UNIX_OK"
+
+      - name: Build LLVM iOS runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/llvm-ios/build.sh
+
+      - name: Build DXMT iOS renderer and stage licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun --sdk macosx --find metal >/dev/null
+          xcrun --sdk macosx --find metallib >/dev/null
+          bash build/dxmt-ios/build.sh
+          bash build/stage-licenses.sh
+          echo "STEAMOS_IOS_DXMT_IOS_OK"
+
+      - name: Report persistent cache stats
+        if: always()
+        shell: bash
+        run: |
+          ccache --show-stats || true
+          du -sh "$CCACHE_DIR" 2>/dev/null || true
+          echo "STEAMIOS_CACHE_STATS_REPORTED"
+
+      - name: Link app and package unsigned Debug IPA
+        shell: bash
+        env:
+          STEAMOS_SKIP_NATIVE_REBUILD: "1"
+        run: bash build/steamos-ios/build-clean-app.sh
+
+      - name: Verify packaged IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/SteamIOS.ipa
+          test -s artifacts/SteamIOS.ipa.sha256
+          test -s artifacts/build-info.json
+          test -s artifacts/SHA256SUMS
+          (cd artifacts && shasum -a 256 -c SHA256SUMS)
+          unzip -tq artifacts/SteamIOS.ipa
+          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/[^/]*\.app/Info.plist$'
+          echo "STEAMIOS_IPA_GATE_OK"
+
+      - name: Upload SteamIOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-Debug-unsigned
+          path: |
+            artifacts/SteamIOS.ipa
+            artifacts/SteamIOS.ipa.sha256
+            artifacts/build-info.json
+            artifacts/SHA256SUMS
+            build/steamos-ios-derived/Build/Products/Debug-iphoneos/SteamIOS.app.dSYM
+          if-no-files-found: error
+          compression-level: 0
