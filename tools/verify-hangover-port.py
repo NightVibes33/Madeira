@@ -44,6 +44,7 @@ def main() -> int:
 
     need("tools/patches/apply-hangover-wine.py",
          "STEAMIOS_HANGOVER_PORT_V1", "STEAMIOS_GAMEPAD_TELEMETRY_V1",
+         "STEAMIOS_LOADER_NOTIFY_DEDUP_V1", "ml1145 SKIP duplicate loader registration",
          "HODLL64", "HODLL", "libarm64ecfex.dll", "libwow64fex.dll",
          "VersionData[WIN11]", "Windows 11 Pro", "26100",
          "NtUserGamepadOp_Vibration", "NtUserGamepadOp_Battery")
@@ -129,7 +130,8 @@ def main() -> int:
              "STEAMIOS_HANGOVER_PORT_V1", "HODLL", "libwow64fex.dll")
         need("wine/dlls/ntdll/version.c", "VersionData[WIN11]", "10, 0, 26100")
         need("wine/dlls/ntdll/signal_arm64ec.c",
-             "MADEIRA_IMAGE_MAP_GUARD", "enter_syscall_callback", "pNotifyImageMap")
+             "MADEIRA_IMAGE_MAP_GUARD", "STEAMIOS_LOADER_NOTIFY_DEDUP_V1",
+             "ml1145 SKIP duplicate loader registration", "pNotifyImageMap")
         need("wine/loader/wine.inf.in", "Windows 11 Pro", "26100")
         need("wine/include/ntuser.h",
              "STEAMIOS_GAMEPAD_TELEMETRY_V1",
