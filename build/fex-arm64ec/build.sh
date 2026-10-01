@@ -17,8 +17,14 @@ if ! grep -q '^#include <cstdlib>' "$STRING_CONV"; then
     git -C "$R/FEX" apply "$PATCH"
 fi
 
+INVALIDATION_HEADER="$R/FEX/Source/Windows/Common/InvalidationTracker.h"
 INVALIDATION_TRACKER="$R/FEX/Source/Windows/Common/InvalidationTracker.cpp"
+python3 "$R/tools/patches/apply-fex-interval-mutex.py" "$INVALIDATION_HEADER"
 python3 "$R/tools/patches/apply-fex-invalidation-lock.py" "$INVALIDATION_TRACKER"
+grep -q 'WritePriorityMutex::Mutex IntervalsLock' "$INVALIDATION_HEADER" || {
+    echo "error: FEX iOS interval mutex fix was not applied" >&2
+    exit 1
+}
 grep -q '\[iOS-xlock\] ml1140' "$INVALIDATION_TRACKER" || {
     echo "error: FEX iOS interval-lock fix was not applied" >&2
     exit 1
