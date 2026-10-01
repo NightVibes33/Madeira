@@ -269,7 +269,12 @@ echo "STEAMOS_HANGOVER_RUNTIME_OK"
 
 rm -rf "$APP/SteamPayload"
 mkdir -p "$APP/SteamPayload"
-/usr/bin/ditto "$STEAM_SOURCE" "$APP/SteamPayload/Steam"
+if /bin/cp -cR "$STEAM_SOURCE" "$APP/SteamPayload/Steam" 2>/dev/null; then
+  echo "STEAMIOS_STEAM_PAYLOAD_APFS_CLONE_OK"
+else
+  /usr/bin/ditto "$STEAM_SOURCE" "$APP/SteamPayload/Steam"
+  echo "STEAMIOS_STEAM_PAYLOAD_DITTO_FALLBACK"
+fi
 test -s "$APP/SteamPayload/Steam/steam.exe"
 test -s "$APP/SteamPayload/Steam/steamclient64.dll"
 test -s "$APP/SteamPayload/Steam/.steamios-bundled-client"
