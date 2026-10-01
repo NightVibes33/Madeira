@@ -1,2 +1,2 @@
 trigger=steamios-fast-component-cache-20261001-v2
-purpose=verify-split-cache-invariants-and-loader-dedup-build
+purpose=validate-warm-split-cache-hit-path
