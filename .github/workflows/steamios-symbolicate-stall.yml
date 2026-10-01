@@ -156,3 +156,11 @@ jobs:
           print("STEAMIOS_FEX_DWARF_RAW_NEAR_END")
           PY
           echo "STEAMIOS_FEX_SYMBOLICATION_COMPLETE"
+
+      - name: Upload isolated ARM64EC translator
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-FEX-ARM64EC-symbol
+          path: FEX/build-arm64ec/Bin/libarm64ecfex.dll
+          if-no-files-found: error
+          compression-level: 0
