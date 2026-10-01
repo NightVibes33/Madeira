@@ -96,4 +96,63 @@ jobs:
           echo "STEAMIOS_FEX_RELOCS_NEAR_BEGIN"
           "$objdump" -r "$dll" | grep -Ei '1803be[0-9a-f]{3}|3be[0-9a-f]{3}' || true
           echo "STEAMIOS_FEX_RELOCS_NEAR_END"
+
+          readobj="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-readobj"
+          dwarfdump="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-dwarfdump"
+          test -x "$readobj"
+          test -x "$dwarfdump"
+
+          echo "STEAMIOS_FEX_SECTION_DETAIL_BEGIN"
+          "$readobj" --sections "$dll"
+          echo "STEAMIOS_FEX_SECTION_DETAIL_END"
+
+          "$dwarfdump" --debug-info "$dll" > "$RUNNER_TEMP/fex.dwarf"
+          python3 - "$RUNNER_TEMP/fex.dwarf" <<'PY'
+          import re, sys
+          target=0x1803beba8
+          lo=target-0x20000
+          hi=target+0x20000
+          text=open(sys.argv[1],errors="replace").read().splitlines()
+          entries=[]
+          cur=[]
+          for line in text:
+              if re.match(r'^0x[0-9a-fA-F]+:\\s+DW_TAG_', line):
+                  if cur:
+                      entries.append(cur)
+                  cur=[line]
+              elif cur:
+                  cur.append(line)
+          if cur:
+              entries.append(cur)
+
+          hits=[]
+          for block in entries:
+              s='\\n'.join(block)
+              m=re.search(r'DW_AT_location\\s+\\((?:DW_OP_addr\\s+)?(0x[0-9a-fA-F]+)',s)
+              if not m:
+                  continue
+              addr=int(m.group(1),16)
+              if lo <= addr <= hi:
+                  name=re.search(r'DW_AT_name\\s+\\("(.*?)"\\)',s)
+                  size=re.search(r'DW_AT_byte_size\\s+\\((0x[0-9a-fA-F]+|[0-9]+)\\)',s)
+                  tag=re.search(r'DW_TAG_([A-Za-z0-9_]+)',block[0])
+                  hits.append((addr, name.group(1) if name else "<?>", size.group(1) if size else "?", tag.group(1) if tag else "?"))
+          hits.sort()
+          print("STEAMIOS_FEX_DWARF_BSS_WINDOW_BEGIN")
+          for addr,name,size,tag in hits:
+              print(f"addr=0x{addr:x} delta={target-addr:+#x} tag={tag} size={size} name={name}")
+          print("STEAMIOS_FEX_DWARF_BSS_WINDOW_END")
+
+          # Also print raw DWARF context for any line that names an address in
+          # the exact 0x1803be000-0x1803c0fff band; this catches expression
+          # forms the simple parser above does not recognize.
+          pat=re.compile(r'0x1803(?:be|bf|c0)[0-9a-fA-F]{3}',re.I)
+          print("STEAMIOS_FEX_DWARF_RAW_NEAR_BEGIN")
+          for i,line in enumerate(text):
+              if pat.search(line):
+                  a=max(0,i-8); b=min(len(text),i+12)
+                  print("---")
+                  print('\\n'.join(text[a:b]))
+          print("STEAMIOS_FEX_DWARF_RAW_NEAR_END")
+          PY
           echo "STEAMIOS_FEX_SYMBOLICATION_COMPLETE"
