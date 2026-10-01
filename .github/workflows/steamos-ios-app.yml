@@ -203,6 +203,16 @@ jobs:
           set -euo pipefail
           dll="$PWD/FEX/build-arm64ec/Bin/libarm64ecfex.dll"
           nm="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin/llvm-nm"
+          if [ ! -s "$dll" ]; then
+            echo "STEAMIOS_FEX_SYMBOL_CACHE_MISS_BUILDING"
+            export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+            PY_VENV="$PWD/build/steamos-python-symbol"
+            rm -rf "$PY_VENV"
+            python3 -m venv "$PY_VENV"
+            "$PY_VENV/bin/python" -m pip install --disable-pip-version-check --quiet 'packaging==24.2'
+            export PATH="$PY_VENV/bin:$PATH"
+            bash build/fex-arm64ec/build.sh
+          fi
           test -s "$dll"
           test -x "$nm"
           echo "STEAMIOS_FEX_STALL_RVA=0x3beba8"
@@ -227,6 +237,8 @@ jobs:
               print(f"STEAMIOS_FEX_STALL_NEAREST addr=0x{nearest[0]:x} delta=0x{target-nearest[0]:x} type={nearest[1]} symbol={nearest[2]}")
           print("STEAMIOS_FEX_SYMBOL_WINDOW_END")
           PY
+          echo "STEAMIOS_FEX_SYMBOLICATION_COMPLETE"
+          exit 86
 
       - name: Configure persistent compiler cache
         shell: bash
