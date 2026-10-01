@@ -19,7 +19,7 @@ fi
 
 INVALIDATION_HEADER="$R/FEX/Source/Windows/Common/InvalidationTracker.h"
 INVALIDATION_TRACKER="$R/FEX/Source/Windows/Common/InvalidationTracker.cpp"
-python3 "$R/tools/patches/apply-fex-interval-mutex.py" "$INVALIDATION_HEADER"
+python3 "$R/tools/patches/apply-fex-interval-mutex.py" "$INVALIDATION_HEADER" "$INVALIDATION_TRACKER"
 python3 "$R/tools/patches/apply-fex-invalidation-lock.py" "$INVALIDATION_TRACKER"
 grep -q 'WritePriorityMutex::Mutex IntervalsLock' "$INVALIDATION_HEADER" || {
     echo "error: FEX iOS interval mutex fix was not applied" >&2
