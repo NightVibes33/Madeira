@@ -44,6 +44,7 @@ int main(void) {
     assert(!winios_gamepad_get_state(4, &result));
     assert(!ios_gamepad_query(0, 0, &output));
     state.connected = 1; state.buttons = 0x1011;
+    state.has_haptics = 1; state.battery_type = 0xff; state.battery_level = 2;
     state.lx = -32768; state.ly = 32767;
     state.rx = -1234; state.ry = 5678;
     state.left_trigger = 255; state.right_trigger = 17;
@@ -59,9 +60,17 @@ int main(void) {
     assert(output.gamepad.thumb_rx == -1234 && output.gamepad.thumb_ry == 5678);
     assert(output.gamepad.left_trigger == 255 && output.gamepad.right_trigger == 17);
     assert(ios_gamepad_query(0, 1, &caps));
-    assert(caps.type == 1 && caps.sub_type == 1 && caps.flags == 0);
-    assert(caps.left_motor_speed == 0 && caps.right_motor_speed == 0);
-    assert(!ios_gamepad_query(0, 2, &caps) && !ios_gamepad_query(4, 0, &output));
+    assert(caps.type == 1 && caps.sub_type == 1 && caps.flags == 1);
+    assert(caps.left_motor_speed == 0xffff && caps.right_motor_speed == 0xffff);
+    struct ios_xinput_vibration vibration = {1234, 4321};
+    struct winios_vibration vibration_read = {0};
+    assert(ios_gamepad_query(0, 2, &vibration));
+    assert(winios_gamepad_get_vibration(0, &vibration_read));
+    assert(vibration_read.packet == 1 && vibration_read.left_motor == 1234 && vibration_read.right_motor == 4321);
+    struct ios_xinput_battery battery = {0};
+    assert(ios_gamepad_query(0, 3, &battery));
+    assert(battery.type == 0xff && battery.level == 2);
+    assert(!ios_gamepad_query(0, 4, &caps) && !ios_gamepad_query(4, 0, &output));
     assert(!ios_gamepad_query(0, 0, NULL));
     for (int i = 1; i < 4; ++i) {
         state.buttons = (uint16_t)(1 << i);
@@ -99,4 +108,4 @@ with tempfile.TemporaryDirectory(prefix='madeira-gamepad-') as tmp:
                     '-O2', '-pthread', '-I', str(root / 'build/win32u-unix'), str(source),
                     str(root / 'app/Madeira/Winios/WiniosGamepad.c'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
-print('PASS: packet changes, ranges, four slots, disconnect/reconnect, query ABI, concurrent snapshots')
+print('PASS: packet changes, ranges, four slots, disconnect/reconnect, XInput haptics+battery ABI, concurrent snapshots')

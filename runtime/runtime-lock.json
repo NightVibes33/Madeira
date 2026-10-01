@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "generated": "2026-09-30",
+  "architecture": "SteamIOS Windows user-mode compatibility runtime",
+  "constraints": {
+    "vm": false,
+    "remote_streaming": false,
+    "qemu": false,
+    "box64_shipping": false,
+    "cpu_translator": "FEX",
+    "windows_runtime": "Wine ARM64EC/WoW64",
+    "gpu": "local Apple GPU via Metal",
+    "jit": "mandatory"
+  },
+  "sources": {
+    "hangover": {
+      "repository": "AndreRH/hangover",
+      "branch": "master",
+      "commit": "56e385b7ff490edd281b288f420677093563560b",
+      "role": "upstream architecture reference",
+      "shipped": false
+    },
+    "hangover_wine": {
+      "repository": "AndreRH/wine",
+      "branch": "arm64ec",
+      "commit": "3ea3a14941b6a122b892c84141ce9662c008081e",
+      "role": "ARM64EC/WoW64 behavior reference",
+      "shipped": false
+    },
+    "hangover_fex": {
+      "repository": "AndreRH/FEX",
+      "branch": "arm64ec",
+      "commit": "fa556167d5a64ec7adb5503c2aa15b169c292cac",
+      "role": "Windows FEX behavior reference",
+      "shipped": false
+    },
+    "steamios_wine": {
+      "repository": "willfaust/wine",
+      "branch": "madeira-lgpl",
+      "commit": "4f5b19718f4de88ecc5cb0dc08b119497a67ba8f",
+      "role": "shipping iOS Wine fork plus Hangover boundary patch",
+      "shipped": true
+    },
+    "steamios_fex": {
+      "repository": "willfaust/FEX",
+      "branch": "ios-port-2607",
+      "commit": "26859e184ad90f0e811d7f8bbd943a4b1573a2c3",
+      "role": "shipping iOS FEX fork",
+      "shipped": true
+    },
+    "dxmt": {
+      "repository": "willfaust/dxmt",
+      "branch": "ios-port",
+      "commit": "a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef",
+      "role": "primary D3D9/10/11 to Metal",
+      "shipped": true
+    },
+    "dxvk": {
+      "repository": "doitsujin/dxvk",
+      "branch": "master",
+      "commit": "685301564ea3486a7098bd37194020da84299617",
+      "role": "optional Vulkan fallback",
+      "shipped": false
+    },
+    "vkd3d_proton": {
+      "repository": "HansKristian-Work/vkd3d-proton",
+      "branch": "master",
+      "commit": "44cf7c2042168f3b8ee37249f0a53ac091e48fd9",
+      "role": "optional D3D12 Vulkan fallback",
+      "shipped": false
+    },
+    "moltenvk": {
+      "repository": "KhronosGroup/MoltenVK",
+      "branch": "main",
+      "commit": "52aa21f54d7a84c5c441fc26359692b0980b384c",
+      "role": "optional Vulkan to Metal layer",
+      "shipped": false
+    },
+    "faudio": {
+      "repository": "FNA-XNA/FAudio",
+      "branch": "master",
+      "commit": "0d03cb04c3c2bacf5e69d0d7e58b65d7202fc618",
+      "role": "XAudio/XACT compatibility candidate",
+      "shipped": false
+    },
+    "ffmpeg": {
+      "repository": "FFmpeg/FFmpeg",
+      "branch": "master",
+      "commit": "653b18f0ccededfeb3b7a7e0fb4f83792969cee8",
+      "role": "media backend candidate",
+      "shipped": false
+    },
+    "gstreamer": {
+      "repository": "GStreamer/gstreamer",
+      "branch": "main",
+      "commit": "beebbceba4e02f23a132884dfcf3b35c776d6b8e",
+      "role": "Wine media backend candidate",
+      "shipped": false
+    },
+    "dav1d": {
+      "repository": "videolan/dav1d",
+      "branch": "master",
+      "commit": "7f12cf23560430c02a83e67bb68eec74d93ce5fd",
+      "role": "AV1 decoder candidate",
+      "shipped": false
+    },
+    "wine_mono": {
+      "repository": "wine-mono/wine-mono",
+      "branch": "main",
+      "commit": "9b72b8f1142c2b096df9e955da8a8a0925fbb3bf",
+      "role": "optional .NET Framework compatibility runtime",
+      "shipped": false
+    },
+    "openal_soft": {
+      "repository": "kcat/openal-soft",
+      "branch": "master",
+      "commit": "6d39f8fbf6518675e86abdd56cc00629c837f947",
+      "role": "optional OpenAL compatibility runtime",
+      "shipped": false
+    },
+    "cnc_ddraw": {
+      "repository": "FunkyFr3sh/cnc-ddraw",
+      "branch": "master",
+      "commit": "279a057ee7e1e4d584b56141c014ab01f3c6ee6d",
+      "role": "optional legacy DirectDraw compatibility fallback",
+      "shipped": false
+    }
+  },
+  "translator_contract": {
+    "x64": {
+      "module": "libarm64ecfex.dll",
+      "compat_alias": "xtajit64.dll",
+      "selector": "HODLL64"
+    },
+    "x86": {
+      "module": "libwow64fex.dll",
+      "compat_alias": "xtajit.dll",
+      "selector": "HODLL"
+    }
+  },
+  "windows_profile": {
+    "name": "Windows 11 Pro",
+    "major": 10,
+    "minor": 0,
+    "build": 26100
+  },
+  "graphics": {
+    "d3d9_10_11_primary": "DXMT -> Metal",
+    "d3d12_primary": "Madeira D3D12 -> Metal",
+    "vulkan_fallback": "DXVK/VKD3D-Proton -> MoltenVK -> Metal (not yet shipping)"
+  },
+  "input": {
+    "native": "Apple GameController + touch + keyboard + mouse",
+    "bluetooth_controllers": true,
+    "windows": [
+      "XInput",
+      "DirectInput",
+      "HID",
+      "Windows.Gaming.Input",
+      "Raw Input target"
+    ],
+    "windows_rumble": "XInputSetState -> win32u -> CoreHaptics when controller supports haptics",
+    "battery_telemetry": "GameController battery -> XInputGetBatteryInformation"
+  }
+}

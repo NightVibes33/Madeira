@@ -8,6 +8,7 @@
  * covers only a 20-byte snapshot, never framework work or a Wine server call. */
 static pthread_mutex_t pad_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct winios_gamepad pads[WINIOS_GAMEPAD_MAX];
+static struct winios_vibration vibrations[WINIOS_GAMEPAD_MAX];
 
 void winios_gamepad_set_state(int index, const struct winios_gamepad *state)
 {
@@ -16,7 +17,6 @@ void winios_gamepad_set_state(int index, const struct winios_gamepad *state)
     if (state && state->connected) {
         next = *state;
         next.connected = 1;
-        memset(next.reserved, 0, sizeof(next.reserved));
     }
     pthread_mutex_lock(&pad_lock);
     next.packet = pads[index].packet;
@@ -40,4 +40,31 @@ int winios_gamepad_get_state(int index, struct winios_gamepad *out)
         else memset(out, 0, sizeof(*out));
     }
     return value.connected != 0;
+}
+
+void winios_gamepad_set_vibration(int index, uint16_t left_motor, uint16_t right_motor)
+{
+    if (index < 0 || index >= WINIOS_GAMEPAD_MAX) return;
+    pthread_mutex_lock(&pad_lock);
+    struct winios_vibration *v = &vibrations[index];
+    if (v->left_motor != left_motor || v->right_motor != right_motor) {
+        v->left_motor = left_motor;
+        v->right_motor = right_motor;
+        v->packet++;
+    }
+    pthread_mutex_unlock(&pad_lock);
+}
+
+int winios_gamepad_get_vibration(int index, struct winios_vibration *out)
+{
+    struct winios_vibration value = {0};
+    if (index < 0 || index >= WINIOS_GAMEPAD_MAX) {
+        if (out) memset(out, 0, sizeof(*out));
+        return 0;
+    }
+    pthread_mutex_lock(&pad_lock);
+    value = vibrations[index];
+    pthread_mutex_unlock(&pad_lock);
+    if (out) *out = value;
+    return 1;
 }

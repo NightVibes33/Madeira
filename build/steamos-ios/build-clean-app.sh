@@ -29,6 +29,12 @@ git submodule update --init --depth 1 wine
 git submodule update --init --depth 1 research/dxmt
 git -C research/dxmt submodule update --init --recursive --depth 1 include/native/directx
 
+# Port the reviewed Hangover Wine/FEX module-selection contract onto the
+# SteamIOS iOS Wine fork.  This is source-level and fail-closed: it preserves
+# the iOS JIT/Mach/pseudo-process work instead of replacing the submodule.
+python3 tools/patches/apply-hangover-wine.py "$R/wine"
+python3 tools/verify-hangover-port.py --materialized
+
 bash tools/bootstrap/fetch-llvm-mingw.sh
 bash tools/runtime-deps/fetch-freetype.sh
 bash tools/runtime-deps/fetch-llvm-project.sh
@@ -111,7 +117,9 @@ test -s app/Madeira/aarch64-windows/steamios-launcher.exe || {
 # accidentally tiny hand-picked farm that would fail as soon as Steam loads
 # another system DLL.
 for f in \
+  app/Madeira/arm64ec-windows/libarm64ecfex.dll \
   app/Madeira/arm64ec-windows/xtajit64.dll \
+  app/Madeira/aarch64-windows/libwow64fex.dll \
   app/Madeira/aarch64-windows/xtajit.dll \
   app/Madeira/aarch64-windows/wow64.dll \
   app/Madeira/aarch64-windows/wow64win.dll \
@@ -244,6 +252,17 @@ test -d "$APP"
 test -s "$APP/Info.plist"
 test -s "$APP/SteamIOS"
 
+# Ship the exact runtime/source/profile contract beside the executable so a
+# device log or IPA can always identify the Windows runtime it contains.
+rm -rf "$APP/Runtime"
+mkdir -p "$APP/Runtime/profiles"
+cp "$R/runtime/runtime-lock.json" "$APP/Runtime/runtime-lock.json"
+cp "$R/runtime/runtime-pack.json" "$APP/Runtime/runtime-pack.json"
+cp "$R/runtime/profiles/steam.json" "$APP/Runtime/profiles/steam.json"
+cp "$R/runtime/profiles/default-game.json" "$APP/Runtime/profiles/default-game.json"
+python3 "$R/tools/verify-hangover-port.py"
+echo "STEAMOS_HANGOVER_RUNTIME_OK"
+
 rm -rf "$APP/SteamPayload"
 mkdir -p "$APP/SteamPayload"
 /usr/bin/ditto "$STEAM_SOURCE" "$APP/SteamPayload/Steam"
@@ -340,6 +359,8 @@ info = {
     },
     "vkd3d": None,
     "moltenvk": None,
+    "runtime_lock": json.loads((root / "runtime" / "runtime-lock.json").read_text()),
+    "runtime_pack": json.loads((root / "runtime" / "runtime-pack.json").read_text()),
     "xcode": xcode,
     "sdk": cmd("xcrun", "--sdk", "iphoneos", "--show-sdk-version"),
     "app": {

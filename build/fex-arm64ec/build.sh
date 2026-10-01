@@ -48,5 +48,11 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
 fi
 
 cmake --build "$B" --target arm64ecfex
-cp "$B/Bin/libarm64ecfex.dll" "$R/app/Madeira/arm64ec-windows/xtajit64.dll"
-ls -l "$R/app/Madeira/arm64ec-windows/xtajit64.dll"
+# Hangover-compatible canonical CPU-module name plus the legacy Madeira alias.
+# Both are intentionally byte-identical; Wine selects the canonical name through
+# HODLL64 while the alias keeps old prefixes and diagnostics compatible.
+cp "$B/Bin/libarm64ecfex.dll" "$R/app/Madeira/arm64ec-windows/libarm64ecfex.dll"
+cp "$R/app/Madeira/arm64ec-windows/libarm64ecfex.dll" "$R/app/Madeira/arm64ec-windows/xtajit64.dll"
+cmp "$R/app/Madeira/arm64ec-windows/libarm64ecfex.dll" "$R/app/Madeira/arm64ec-windows/xtajit64.dll"
+echo "STEAMOS_HANGOVER_FEX64_OK"
+ls -l "$R/app/Madeira/arm64ec-windows/libarm64ecfex.dll" "$R/app/Madeira/arm64ec-windows/xtajit64.dll"

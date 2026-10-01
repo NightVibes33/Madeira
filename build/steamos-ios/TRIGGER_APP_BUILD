@@ -1,2 +1,2 @@
-trigger=steamios-big-picture-no-black-20260930-v4
-purpose=rebuild-after-mobile-contract-updated-for-gamepadui-no-console-atomic-handoff
+trigger=steamios-real-big-picture-bootstrap-20261001-v5
+purpose=build-wine-scm-event-real-steam-only-madsync-off-clone-first

@@ -2120,9 +2120,13 @@ struct ios_xinput_caps
     struct ios_xinput_gamepad gamepad;
     WORD  left_motor_speed, right_motor_speed;
 };
+struct ios_xinput_vibration { WORD left_motor_speed, right_motor_speed; };
+struct ios_xinput_battery { BYTE type, level; };
 
 C_ASSERT( sizeof(struct ios_xinput_state) == 16 );
 C_ASSERT( sizeof(struct ios_xinput_caps) == 20 );
+C_ASSERT( sizeof(struct ios_xinput_vibration) == 4 );
+C_ASSERT( sizeof(struct ios_xinput_battery) == 2 );
 C_ASSERT( sizeof(struct winios_gamepad) == 20 );
 
 /***********************************************************************
@@ -2170,14 +2174,26 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
          * (low bits clear, as real XInput reports them) and the triggers 8. */
         caps->type     = 1;
         caps->sub_type = 1;
-        /* Controller rumble is not implemented by this transport. */
-        caps->flags    = 0;
+        caps->flags    = pad.has_haptics ? 0x0001 : 0; /* XINPUT_CAPS_FFB_SUPPORTED */
         caps->gamepad.buttons       = 0xf3ff;
         caps->gamepad.left_trigger  = 0xff;
         caps->gamepad.right_trigger = 0xff;
         caps->gamepad.thumb_lx = caps->gamepad.thumb_ly = (SHORT)0xffc0;
         caps->gamepad.thumb_rx = caps->gamepad.thumb_ry = (SHORT)0xffc0;
-        caps->left_motor_speed = caps->right_motor_speed = 0;
+        caps->left_motor_speed = caps->right_motor_speed = pad.has_haptics ? 0xffff : 0;
+        return 1;
+    }
+    case 2:   /* NtUserGamepadOp_Vibration */
+    {
+        const struct ios_xinput_vibration *vibration = buffer;
+        winios_gamepad_set_vibration(index, vibration->left_motor_speed, vibration->right_motor_speed);
+        return 1;
+    }
+    case 3:   /* NtUserGamepadOp_Battery */
+    {
+        struct ios_xinput_battery *battery = buffer;
+        battery->type = pad.battery_type;
+        battery->level = pad.battery_level;
         return 1;
     }
     default:

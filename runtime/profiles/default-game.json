@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "name": "SteamIOS default Windows game profile",
+  "selector": "Steam AppID",
+  "cpu": {
+    "translator": "FEX",
+    "x86": true,
+    "x64": true
+  },
+  "windows": {
+    "version": "win11",
+    "build": 26100
+  },
+  "renderer": {
+    "d3d9": "DXMT",
+    "d3d10": "DXMT",
+    "d3d11": "DXMT",
+    "d3d12": "Madeira-D3D12",
+    "fallback": "per-title"
+  },
+  "input": {
+    "physical_controller": true,
+    "bluetooth": true,
+    "touch": true,
+    "xinput": true,
+    "directinput": true,
+    "hid": true,
+    "windows_gaming_input": true,
+    "rumble": "XInput/CoreHaptics",
+    "battery": "XInput/GameController telemetry"
+  },
+  "audio": {
+    "primary": "WASAPI/MMDevAPI -> CoreAudio",
+    "apis": [
+      "DirectSound",
+      "WinMM",
+      "X3DAudio"
+    ],
+    "faudio": "optional compatibility layer"
+  },
+  "media": {
+    "media_foundation": true,
+    "backend": "Wine/iOS media bridge; FFmpeg/GStreamer/dav1d optional pinned candidates"
+  },
+  "lifecycle": {
+    "return_to_steam_on_exit": true,
+    "preserve_prefix": true
+  }
+}

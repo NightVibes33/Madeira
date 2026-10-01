@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "generated": "2026-09-30",
+  "policy": "Only components already built/staged by SteamIOS are marked shipping. Pinned candidates remain disabled until their iOS build and on-device gates pass.",
+  "shipping": {
+    "vc_runtime": {
+      "status": "shipping",
+      "source": "Microsoft VC++ Redistributable extraction",
+      "artifacts": [
+        "concrt140.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "ucrtbase.dll"
+      ]
+    },
+    "directx_legacy": {
+      "status": "partial-shipping",
+      "artifacts": [
+        "d3d9.dll",
+        "d3dx9_43.dll",
+        "d3dcompiler_43.dll",
+        "d3dcompiler_47.dll",
+        "X3DAudio1_7.dll",
+        "XAPOFX1_5.dll",
+        "dsound.dll",
+        "winmm.dll"
+      ]
+    },
+    "media_foundation": {
+      "status": "windows-api-shipping",
+      "artifacts": [
+        "mf.dll",
+        "mfplat.dll",
+        "mfreadwrite.dll",
+        "windowscodecs.dll"
+      ],
+      "note": "Codec/backend certification remains a device gate; DLL presence alone is not considered video compatibility."
+    },
+    "managed_web_surfaces": {
+      "status": "partial-shipping",
+      "artifacts": [
+        "mscoree.dll",
+        "mshtml.dll"
+      ],
+      "note": "Wine Mono/Gecko payloads are not yet marked shipping."
+    },
+    "audio_host": {
+      "status": "shipping",
+      "path": "WASAPI/MMDevAPI -> RemoteIO/CoreAudio"
+    },
+    "controllers": {
+      "status": "shipping",
+      "path": "GameController -> win32u -> XInput",
+      "features": [
+        "Bluetooth/wireless discovery",
+        "four stable slots",
+        "hotplug",
+        "touch merge",
+        "XInput rumble via CoreHaptics when available",
+        "XInput battery telemetry when available"
+      ]
+    }
+  },
+  "candidates": {
+    "faudio": {
+      "status": "pinned-not-shipping"
+    },
+    "openal_soft": {
+      "status": "pinned-not-shipping"
+    },
+    "wine_mono": {
+      "status": "pinned-not-shipping"
+    },
+    "wine_gecko": {
+      "status": "not-pinned",
+      "note": "Do not silently download an unverified Gecko build."
+    },
+    "ffmpeg": {
+      "status": "pinned-not-shipping"
+    },
+    "gstreamer": {
+      "status": "pinned-not-shipping"
+    },
+    "dav1d": {
+      "status": "pinned-not-shipping"
+    },
+    "dxvk": {
+      "status": "pinned-not-shipping"
+    },
+    "vkd3d_proton": {
+      "status": "pinned-not-shipping"
+    },
+    "moltenvk": {
+      "status": "pinned-not-shipping"
+    },
+    "cnc_ddraw": {
+      "status": "pinned-not-shipping"
+    }
+  },
+  "release_gates": [
+    "x86 and x64 PE execution",
+    "Steam CEF multiprocess/login/Steam Guard",
+    "game download/install/PLAY",
+    "D3D11 DXMT recurring Metal presents",
+    "D3D12 recurring Metal presents",
+    "media cutscene decode",
+    "CoreAudio output",
+    "Bluetooth controller input, reconnect, rumble and battery where hardware exposes them",
+    "game exit returns to Steam",
+    "warm Big Picture first real frame <= 5000 ms"
+  ]
+}

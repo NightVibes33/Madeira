@@ -125,10 +125,18 @@ int madsync_enabled(void)
     static int state = -1;
     if (state < 0)
     {
-        int on = madeira_cfg_bool( "inproc-sync", 1 );   /* ml1095: madeira.cfg inproc-sync = 0 disables */
+        const char *env = getenv( "MADEIRA_INPROC_SYNC" );
+        int on;
+        if (env && *env)
+            on = (!strcmp( env, "1" ) || !strcmp( env, "on" ) ||
+                  !strcmp( env, "true" ) || !strcmp( env, "yes" ));
+        else
+            on = madeira_cfg_bool( "inproc-sync", 1 );
+
         state = on;
-        dprintf( 2, "[madsync] ml1058 in-process synchronisation %s (madeira.cfg inproc-sync = 0 disables)\n",
-                 on ? "ENABLED" : "disabled" );
+        dprintf( 2, "[madsync] ml1143 in-process synchronisation %s (source=%s)\n",
+                 on ? "ENABLED" : "disabled",
+                 (env && *env) ? "MADEIRA_INPROC_SYNC" : "madeira.cfg/default" );
     }
     return state;
 }

@@ -418,3 +418,46 @@ Editing is transient and independent from the persistent **Show Controller
 Overlay** setting. Resetting a layout also preserves that setting. The editor
 owns touch only in landscape; portrait stays click-through so an invisible
 overlay cannot trap Steam input.
+
+
+## Hangover convergence — 2026-09-30
+
+SteamIOS now treats Hangover as the upstream reference for the Windows CPU
+translation boundary while retaining the iOS-specific Wine/FEX forks required
+by the platform. The shipping source pins and upstream references are recorded
+in `runtime/runtime-lock.json`.
+
+The clean build applies a fail-closed source patch that adds Hangover-compatible
+translator selectors:
+
+```text
+HODLL64=libarm64ecfex.dll
+HODLL=libwow64fex.dll
+```
+
+Both canonical module names and the old Madeira aliases are packaged. FEX
+remains mandatory and continues to use the StikDebug-backed RX/RW JIT pool and
+the relocated WoW64 guest window.
+
+Wine's default user-mode compatibility profile is Windows 11 build 26100.
+This is a Win32/NT API identity; SteamIOS does not implement or boot a Windows
+kernel, Windows desktop, TPM, Secure Boot, Hyper-V or kernel drivers.
+
+Bluetooth and wired controllers remain native first-class input through Apple
+GameController, then the existing SteamIOS/Winios bridge exposes controller
+state to Windows XInput/DirectInput/HID/Windows.Gaming.Input. Touch input
+remains independent and can be used simultaneously.
+
+The normal user-visible path remains windowless: native Steam launch surface,
+then an atomic handoff to the first verified Steam Big Picture frame. Wine,
+cmd.exe, console windows and black startup transitions are not product UI.
+The warm target remains **3–5 seconds to the first real Big Picture frame**.
+
+DXMT and Madeira D3D12 remain the primary Metal paths. DXVK, VKD3D-Proton,
+MoltenVK, FAudio, FFmpeg, GStreamer and dav1d are pinned as optional
+compatibility sources but are not marked shipping until their iOS builds and
+device feature tests pass. They must be lazy/per-game fallbacks and must not
+increase ordinary Steam boot time.
+
+See `docs/HANGOVER_PORT.md` for the complete convergence contract and
+`tools/verify-hangover-port.py` for the CI discriminator.

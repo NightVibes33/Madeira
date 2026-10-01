@@ -14,8 +14,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BASELINE = "9e8291eb42519b35b3d40b5f915c3a5f6d4fff45"
 EXPECTED_GITLINKS = {
-    "FEX": "2838f3be52437620348264ada6c41042a9085290",
-    "wine": "8e3d23c77ceb903b59fdd8c123c867b7591490d5",
+    "FEX": "26859e184ad90f0e811d7f8bbd943a4b1573a2c3",
+    "wine": "4f5b19718f4de88ecc5cb0dc08b119497a67ba8f",
     "research/dxmt": "a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef",
 }
 EXPECTED_RPMALLOC = "812c2b9cf4310ffacf14e6b64066e78ab0c394b5"

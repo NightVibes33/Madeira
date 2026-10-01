@@ -40,5 +40,10 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
 fi
 
 cmake --build "$B" --target wow64fex
-cp "$B/Bin/libwow64fex.dll" "$R/app/Madeira/aarch64-windows/xtajit.dll"
-ls -l "$R/app/Madeira/aarch64-windows/xtajit.dll"
+# Hangover-compatible canonical WoW64 CPU-module name plus the legacy Madeira
+# alias.  HODLL selects libwow64fex.dll in production.
+cp "$B/Bin/libwow64fex.dll" "$R/app/Madeira/aarch64-windows/libwow64fex.dll"
+cp "$R/app/Madeira/aarch64-windows/libwow64fex.dll" "$R/app/Madeira/aarch64-windows/xtajit.dll"
+cmp "$R/app/Madeira/aarch64-windows/libwow64fex.dll" "$R/app/Madeira/aarch64-windows/xtajit.dll"
+echo "STEAMOS_HANGOVER_FEX32_OK"
+ls -l "$R/app/Madeira/aarch64-windows/libwow64fex.dll" "$R/app/Madeira/aarch64-windows/xtajit.dll"

@@ -158,6 +158,17 @@ jobs:
           retry_cmd wine git -c http.version=HTTP/1.1 submodule update --init --depth 1 wine
           retry_cmd dxmt git -c http.version=HTTP/1.1 submodule update --init --depth 1 research/dxmt
           retry_cmd directx git -C research/dxmt -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 include/native/directx
+
+          # The workflow builds Wine before build-clean-app.sh and later calls
+          # that script with STEAMOS_SKIP_NATIVE_REBUILD=1. Apply the
+          # Hangover boundary patch here, before ANY Wine configure/build.
+          python3 tools/patches/apply-hangover-wine.py "$PWD/wine"
+          grep -F 'STEAMIOS_HANGOVER_PORT_V1' wine/dlls/ntdll/loader.c
+          grep -F 'STEAMIOS_HANGOVER_PORT_V1' wine/dlls/wow64/syscall.c
+          grep -F 'VersionData[WIN11]' wine/dlls/ntdll/version.c
+          python3 tools/verify-hangover-port.py --materialized
+          echo "STEAMOS_HANGOVER_WINE_SOURCE_READY"
+
           bash tools/bootstrap/fetch-llvm-mingw.sh
           bash tools/runtime-deps/fetch-freetype.sh
           bash tools/runtime-deps/fetch-llvm-project.sh
@@ -169,7 +180,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: app/Madeira/i386-windows
-          key: steamios-i386-farm-xcode27-v1-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/bootstrap/fetch-llvm-mingw.sh', 'build/wine-i386/build.sh') }}
+          key: steamios-i386-farm-xcode27-v2-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'tools/bootstrap/fetch-llvm-mingw.sh', 'build/wine-i386/build.sh') }}
 
       - name: Restore compiled runtime cache
         uses: actions/cache@v4
@@ -184,7 +195,7 @@ jobs:
             build/freetype-ios/build
             toolchains/llvm-host-build
             toolchains/llvm-ios-build
-          key: steamios-runtime-xcode27-v4-${{ hashFiles('tools/verify-madeira-pins.py', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/**/*.sh', 'build/wine-pe/**/*.sh', 'build/ntdll-unix/**/*.sh', 'build/win32u-unix/**/*.sh', 'build/llvm-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh') }}
+          key: steamios-runtime-xcode27-v5-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/**/*.sh', 'build/wine-pe/**/*.sh', 'build/ntdll-unix/**/*.sh', 'build/win32u-unix/**/*.sh', 'build/llvm-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh') }}
 
       - name: Configure persistent compiler cache
         shell: bash

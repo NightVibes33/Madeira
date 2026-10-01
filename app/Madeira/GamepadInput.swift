@@ -1,8 +1,83 @@
 import Foundation
 // GameController supports background handler queues but lacks Sendable annotations.
 @preconcurrency import GameController
+@preconcurrency import CoreHaptics
 import UIKit
 import SwiftUI
+
+
+private final class SteamIOSControllerHaptics: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "steamios.controller.haptics", qos: .userInteractive)
+    private let engine: CHHapticEngine
+    private var player: CHHapticPatternPlayer?
+    private var playing = false
+    private var lastMagnitude: UInt16 = 0
+
+    init?(controller: GCController) {
+        guard let haptics = controller.haptics else { return nil }
+        let locality: GCHapticsLocality =
+            haptics.supportedLocalities.contains(.handles) ? .handles : .default
+        guard let engine = haptics.createEngine(withLocality: locality) else { return nil }
+        do { try engine.start() } catch { return nil }
+        self.engine = engine
+        engine.stoppedHandler = { [weak self] _ in
+            self?.queue.async {
+                self?.player = nil
+                self?.playing = false
+            }
+        }
+        engine.resetHandler = { [weak self] in
+            guard let self else { return }
+            self.queue.async {
+                self.player = nil
+                self.playing = false
+                try? self.engine.start()
+            }
+        }
+    }
+
+    func setMotors(left: UInt16, right: UInt16) {
+        let magnitude = max(left, right)
+        queue.async { [weak self] in self?.apply(magnitude) }
+    }
+
+    func stop() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            try? self.player?.stop(atTime: CHHapticTimeImmediate)
+            self.player = nil
+            self.playing = false
+            self.lastMagnitude = 0
+        }
+    }
+
+    private func apply(_ magnitude: UInt16) {
+        guard magnitude != lastMagnitude else { return }
+        lastMagnitude = magnitude
+        if player == nil && magnitude > 0 {
+            let event = CHHapticEvent(
+                eventType: .hapticContinuous,
+                parameters: [CHHapticEventParameter(parameterID: .hapticIntensity, value: 1)],
+                relativeTime: 0,
+                duration: TimeInterval(Double(GCHapticDurationInfinite))
+            )
+            guard let pattern = try? CHHapticPattern(events: [event], parameters: []),
+                  let newPlayer = try? engine.makePlayer(with: pattern) else { return }
+            player = newPlayer
+        }
+        guard let player else { return }
+        let parameter = CHHapticDynamicParameter(
+            parameterID: .hapticIntensityControl,
+            value: Float(magnitude) / Float(UInt16.max),
+            relativeTime: 0
+        )
+        try? player.sendParameters([parameter], atTime: CHHapticTimeImmediate)
+        if !playing {
+            try? player.start(atTime: CHHapticTimeImmediate)
+            playing = true
+        }
+    }
+}
 
 /// ml1930: physical and touch controller snapshots share the same serial publisher.
 /// Slot/profile/timer state belongs exclusively to `queue`. The app lifecycle
@@ -39,11 +114,14 @@ final class GamepadInput: @unchecked Sendable {
     private let queue = DispatchQueue(label: "madeira.gamepad", qos: .userInteractive)
     private var controllers = [GCController?](repeating: nil, count: 4)
     private var profiles = [GCExtendedGamepad?](repeating: nil, count: 4)
+    private var haptics = [SteamIOSControllerHaptics?](repeating: nil, count: 4)
+    private var vibrationPackets = [UInt32](repeating: 0, count: 4)
     private var timer: DispatchSourceTimer?
     private var active = false
     private var touchState = TouchGamepadState()
     @MainActor private var observers: [NSObjectProtocol] = []
     @MainActor private var started = false
+    @MainActor private var wirelessDiscoveryStarted = false
 
     @MainActor func start() {
         guard !started else { return }
@@ -51,6 +129,13 @@ final class GamepadInput: @unchecked Sendable {
         LogStore.shared.log("[xinput] ml1920 physical controllers enabled=\(Self.enabled ? 1 : 0)")
         LogStore.shared.log("[touch-xinput] ml1930 enabled=\(Self.touchEnabled ? 1 : 0)")
         guard Self.enabled else { return }
+        if !wirelessDiscoveryStarted {
+            wirelessDiscoveryStarted = true
+            LogStore.shared.log("[xinput] wireless/Bluetooth controller discovery started")
+            GCController.startWirelessControllerDiscovery {
+                fputs("[xinput] wireless/Bluetooth controller discovery completed\n", stderr)
+            }
+        }
         let center = NotificationCenter.default
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -83,6 +168,9 @@ final class GamepadInput: @unchecked Sendable {
             for i in controllers.indices {
                 guard let old = controllers[i], !live.contains(where: { $0.0 === old }) else { continue }
                 profiles[i]?.valueChangedHandler = nil
+                haptics[i]?.stop()
+                haptics[i] = nil
+                vibrationPackets[i] = 0
                 controllers[i] = nil
                 profiles[i] = nil
                 fputs("[xinput] ml1920 slot=\(i) disconnected\n", stderr)
@@ -92,12 +180,15 @@ final class GamepadInput: @unchecked Sendable {
                       let i = controllers.firstIndex(where: { $0 == nil }) else { continue }
                 controllers[i] = controller
                 profiles[i] = profile
+                haptics[i] = SteamIOSControllerHaptics(controller: controller)
                 profile.valueChangedHandler = { [weak self] _, _ in
                     // Explicit queue hop also serializes callbacks already in flight
                     // when a controller is disconnected or the app resigns active.
                     self?.queue.async { [weak self] in self?.sample() }
                 }
-                fputs("[xinput] ml1920 slot=\(i) connected\n", stderr)
+                let transport = controller.isAttachedToDevice ? "attached" : "wireless/Bluetooth"
+                let name = controller.vendorName ?? controller.productCategory
+                fputs("[xinput] ml1920 slot=\(i) connected transport=\(transport) name=\(name) haptics=\(haptics[i] != nil ? 1 : 0)\n", stderr)
             }
             updateTimer()
             sample()
@@ -107,7 +198,10 @@ final class GamepadInput: @unchecked Sendable {
     private func setActive(_ value: Bool) {
         queue.async { [self] in
             active = value
-            if !value { touchState.clear() }
+            if !value {
+                touchState.clear()
+                for haptic in haptics { haptic?.setMotors(left: 0, right: 0) }
+            }
             updateTimer()
             sample()
         }
@@ -164,6 +258,18 @@ final class GamepadInput: @unchecked Sendable {
                 state.ly = Self.axis(pad.leftThumbstick.yAxis.value)
                 state.rx = Self.axis(pad.rightThumbstick.xAxis.value)
                 state.ry = Self.axis(pad.rightThumbstick.yAxis.value)
+                state.has_haptics = haptics[i] == nil ? 0 : 1
+                if pad.controller?.isAttachedToDevice == true {
+                    state.battery_type = 1
+                    state.battery_level = 3
+                } else if let battery = pad.controller?.battery {
+                    state.battery_type = 0xff
+                    let level = max(0, min(1, battery.batteryLevel))
+                    state.battery_level = level <= 0.05 ? 0 : (level < 0.25 ? 1 : (level < 0.70 ? 2 : 3))
+                } else {
+                    state.battery_type = 0xff
+                    state.battery_level = 0
+                }
             }
             if active && touchConnected {
                 let physical = GamepadSample(buttons: state.buttons,
@@ -175,6 +281,14 @@ final class GamepadInput: @unchecked Sendable {
                 state.lx = merged.lx; state.ly = merged.ly; state.rx = merged.rx; state.ry = merged.ry
             }
             winios_gamepad_set_state(Int32(i), &state)
+            if pad != nil {
+                var vibration = winios_vibration()
+                if winios_gamepad_get_vibration(Int32(i), &vibration) != 0,
+                   vibration.packet != vibrationPackets[i] {
+                    vibrationPackets[i] = vibration.packet
+                    haptics[i]?.setMotors(left: vibration.left_motor, right: vibration.right_motor)
+                }
+            }
         }
     }
 }

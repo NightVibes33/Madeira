@@ -1,13 +1,17 @@
 # Physical and touch controllers through XInput
 
-Paired GameController devices and the existing landscape touch editor feed
-Windows games through a shared XInput snapshot. Up to four physical extended
+Paired GameController devices — including supported Bluetooth/wireless Xbox,
+PlayStation, MFi and other extended-profile pads — and the existing landscape
+touch editor feed Windows games through a shared XInput snapshot. Up to four physical extended
 profiles have stable slots; disconnecting one does not renumber the others.
 Touch input merges into player 1 (slot 0).
 
 ## Physical input and transport
 
-The app captures live profiles and samples them on a serial queue at 250 Hz
+SteamIOS starts Apple GameController wireless discovery at product startup and
+also observes connect/disconnect notifications, so a Bluetooth pad can be
+paired before launch or hot-plugged while Steam is running. The app captures
+live profiles and samples them on a serial queue at 250 Hz
 (4 ms with 1 ms scheduling leeway), with change callbacks for prompt updates.
 The timer stops while inactive or with no connected physical pads. Inactive
 controllers remain connected but report neutral input. Disconnects clear slots
@@ -50,8 +54,10 @@ whole producer and controller event claims. Set `env.MADEIRA_TOUCH_XINPUT = 0`
 to disable only touch gamepad input. `[xinput] ml1920` logs physical enablement
 and connections; `[touch-xinput] ml1930` logs touch enablement once.
 
-Vibration, battery telemetry, DirectInput, controller-driven library navigation
-and the fork's larger editor/remapping redesign are outside this contribution.
+XInput vibration is bridged back through win32u to Core Haptics when the
+controller exposes haptics, and GameController battery telemetry is surfaced
+through XInputGetBatteryInformation. DirectInput/HID/Windows.Gaming.Input
+remain compatibility surfaces above the same native controller source.
 
 ## Integration prerequisite
 

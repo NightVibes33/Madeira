@@ -14,13 +14,24 @@ struct winios_gamepad {
     uint8_t left_trigger, right_trigger;
     int16_t lx, ly, rx, ry;
     uint8_t connected;
-    uint8_t reserved[3];
+    /* XInput-compatible host telemetry. battery_type uses XInput's byte values
+     * (1=wired, 0xff=unknown); battery_level is 0..3. */
+    uint8_t battery_type;
+    uint8_t battery_level;
+    uint8_t has_haptics;
+};
+
+struct winios_vibration {
+    uint32_t packet;
+    uint16_t left_motor, right_motor;
 };
 
 /* NULL disconnects. The transport owns packet numbers; unchanged samples do
  * not advance them. All callers may run concurrently. No callbacks under lock. */
 void winios_gamepad_set_state(int index, const struct winios_gamepad *state);
 int winios_gamepad_get_state(int index, struct winios_gamepad *out);
+void winios_gamepad_set_vibration(int index, uint16_t left_motor, uint16_t right_motor);
+int winios_gamepad_get_vibration(int index, struct winios_vibration *out);
 #ifdef __cplusplus
 }
 #endif

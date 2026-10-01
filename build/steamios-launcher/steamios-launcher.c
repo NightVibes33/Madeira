@@ -13,20 +13,33 @@ static void write_marker(const wchar_t *path, const char *text)
     CloseHandle(h);
 }
 
-static void start_services_hidden(void)
+static HANDLE start_services_hidden(void)
 {
     wchar_t system_dir[MAX_PATH], services[MAX_PATH];
     STARTUPINFOW si; PROCESS_INFORMATION pi;
-    if (!GetSystemDirectoryW(system_dir, MAX_PATH)) return;
+    if (!GetSystemDirectoryW(system_dir, MAX_PATH)) return NULL;
     lstrcpynW(services, system_dir, MAX_PATH);
-    if (lstrlenW(services) + 14 >= MAX_PATH) return;
+    if (lstrlenW(services) + 14 >= MAX_PATH) return NULL;
     lstrcatW(services, L"\\services.exe");
     ZeroMemory(&si, sizeof(si)); ZeroMemory(&pi, sizeof(pi));
     si.cb = sizeof(si); si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
-    if (CreateProcessW(services, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW,
-                       NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    }
+    if (!CreateProcessW(services, NULL, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi))
+        return NULL;
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
+}
+
+/* Use upstream Wine SCM readiness. */
+static BOOL wait_for_services_ready(HANDLE started_event, HANDLE services_process)
+{
+    HANDLE handles[2];
+    DWORD count = 1, status;
+    if (!started_event) return FALSE;
+    handles[0] = started_event;
+    if (services_process) handles[count++] = services_process;
+    status = WaitForMultipleObjects(count, handles, FALSE, 3500);
+    return status == WAIT_OBJECT_0;
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show)
@@ -62,7 +75,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         return 2;
     }
 
-    start_services_hidden();
+    {
+        HANDLE started_event = CreateEventW(NULL, TRUE, FALSE, L"__wine_SvcctlStarted");
+        HANDLE services_process;
+        BOOL services_ready;
+        if (!started_event) return 5;
+        ResetEvent(started_event);
+        services_process = start_services_hidden();
+        services_ready = services_process && wait_for_services_ready(started_event, services_process);
+        if (services_process) CloseHandle(services_process);
+        CloseHandle(started_event);
+        if (!services_ready) {
+            write_marker(L"C:\\.steamios-steam-launch-error", "Wine Service Control Manager did not become ready\r\n");
+            return 5;
+        }
+    }
     lstrcpynW(cwd, steam, MAX_PATH);
     { wchar_t *slash = wcsrchr(cwd, L'\\'); if (slash) *slash = 0; }
 

@@ -1114,6 +1114,8 @@ struct ContentView: View {
     @State private var compositorBaseline: UInt64 = 0
     @State private var steamProcessObserved = false
     @State private var steamLandscapeRequested = false
+    @State private var steamBootStartedAt: CFAbsoluteTime = 0
+    @State private var steamSpawnElapsedMS: Int? = nil
     @State private var productState: ProductState = .startingJIT
     @Namespace private var pointerNS
 
@@ -1191,6 +1193,8 @@ struct ContentView: View {
                         return
                     }
                     steamProcessObserved = true
+                    steamSpawnElapsedMS = Int((CFAbsoluteTimeGetCurrent() - steamBootStartedAt) * 1000.0)
+                    logStore.log("[boot-budget] steam.exe spawned at \(steamSpawnElapsedMS ?? -1)ms target<=3000ms")
                     presentBaseline = Int(madeira_get_present_count())
                     compositorBaseline = winios_get_surface_present_count()
                     logStore.log("Steam process launched; waiting for verified Steam pixels.",
@@ -1202,13 +1206,19 @@ struct ContentView: View {
                     winios_get_surface_present_count() > compositorBaseline
                 guard steamPresented, SteamIOSOrientation.isLandscape else { return }
 
-                // Atomic product handoff: make the verified Steam frame visible
-                // before removing the native Steam boot surface. There must never
-                // be a frame where both surfaces are absent/transparent.
+                // Real-Steam-only startup: the Metal surface was already visible.
+                // This transition only marks that a verified Steam frame exists and
+                // enables controls; no native loading artwork is removed here.
                 MetalBackedView.refreshPresentationGeometry()
                 MetalHostView.shared.isHidden = steamSettingsPresented
                 winios_set_product_visible(steamSettingsPresented ? 0 : 1)
                 MetalHostView.shared.alpha = 1
+                let firstFrameMS = Int((CFAbsoluteTimeGetCurrent() - steamBootStartedAt) * 1000.0)
+                if firstFrameMS <= 5000 {
+                    logStore.log("[boot-budget] first verified Big Picture frame \(firstFrameMS)ms target=3000-5000ms", level: .success)
+                } else {
+                    logStore.log("[boot-budget] first verified Big Picture frame \(firstFrameMS)ms OVER 5000ms target", level: .error)
+                }
                 productState = .running
                 TouchControlsHost.setHidden(steamSettingsPresented)
                 TouchControlsHost.attach()
@@ -1216,18 +1226,15 @@ struct ContentView: View {
     }
 
     /// Shipping product root. JIT/Wine internals are never user-visible.
-    /// Until Steam has produced a verified frame, an opaque Steam boot surface
-    /// owns every pixel; the first real Big Picture frame replaces it atomically.
+    /// There is deliberately no native Steam/Big-Picture imitation during boot:
+    /// only the real Metal-backed Windows Steam output is a product surface.
     private var steamProductBody: some View {
         ZStack {
-            SteamLaunchPalette.deep
-                .ignoresSafeArea()
+            // Product rule: during startup there is no native imitation of
+            // Steam.  The window-hosted Metal surface is the only product
+            // surface; the first pixels the user sees from the runtime are
+            // pixels rendered by the real Windows Steam client.
             MadeiraMetalView().ignoresSafeArea()
-
-            if productState == .startingJIT || productState == .launchingSteam {
-                steamLaunchSurface
-                    .zIndex(20)
-            }
 
             if case .failed(let message) = productState {
                 VStack(spacing: 14) {
@@ -1263,61 +1270,7 @@ struct ContentView: View {
                 .zIndex(30)
             }
         }
-        .background(SteamLaunchPalette.deep)
         .ignoresSafeArea()
-    }
-
-    private enum SteamLaunchPalette {
-        static let deep = Color(red: 0.015, green: 0.055, blue: 0.090)
-        static let blue = Color(red: 0.055, green: 0.160, blue: 0.255)
-    }
-
-    /// Immediate product-facing boot view. This is intentionally not a JIT,
-    /// Wine, command-window, or diagnostic screen.
-    private var steamLaunchSurface: some View {
-        ZStack {
-            LinearGradient(
-                colors: [SteamLaunchPalette.blue, SteamLaunchPalette.deep],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 13) {
-                ZStack {
-                    Circle()
-                        .stroke(.white.opacity(0.95), lineWidth: 4)
-                        .frame(width: 62, height: 62)
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 18, height: 18)
-                        .offset(x: 13, y: -10)
-                    Capsule()
-                        .fill(.white)
-                        .frame(width: 34, height: 7)
-                        .rotationEffect(.degrees(-32))
-                        .offset(x: -9, y: 10)
-                }
-                .accessibilityHidden(true)
-
-                Text("STEAM")
-                    .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    .tracking(4.5)
-                    .foregroundStyle(.white)
-
-                Text("Starting Big Picture")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.78))
-
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .tint(.white)
-                    .padding(.top, 2)
-            }
-        }
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Steam. Starting Big Picture.")
     }
 
     private var failureLogTail: String {
@@ -1360,6 +1313,9 @@ struct ContentView: View {
     private func startSteamAutomatically() {
         guard !didStartSteamProduct else { return }
         didStartSteamProduct = true
+        steamBootStartedAt = CFAbsoluteTimeGetCurrent()
+        steamSpawnElapsedMS = nil
+        logStore.log("[boot-budget] start t=0ms warm-target=3000-5000ms")
         productState = .startingJIT
         steamProcessObserved = false
         steamLandscapeRequested = true
@@ -1370,10 +1326,24 @@ struct ContentView: View {
         // Rotate immediately, in parallel with JIT/prefix preparation, so the
         // first visible product frame is already in the Big Picture geometry.
         SteamIOSOrientation.requestLandscape(log: logStore)
-        MetalHostView.shared.alpha = 0
+        // Never cover startup with a fake/native Steam screen. The actual
+        // Metal/Wine surface owns the product pixels from launch onward.
+        MetalHostView.shared.alpha = 1
         MetalHostView.shared.isHidden = false
-        winios_set_product_visible(0)
+        winios_set_product_visible(1)
         TouchControlsHost.setHidden(true)
+
+        // Prefix/Steam preparation is filesystem-only and guarded by a
+        // single-flight mutex in WineProcessBridge. Start it before JIT so
+        // APFS cloning/profile repair overlaps StikDebug/FEX preparation.
+        let warmDocs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let warmPrefixPath = warmDocs.appendingPathComponent("wine", isDirectory: true).path
+        DispatchQueue.global(qos: .userInitiated).async {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            warmPrefixPath.withCString { madeira_seed_prefix_if_needed($0) }
+            let elapsed = Int((CFAbsoluteTimeGetCurrent() - t0) * 1000.0)
+            fputs("[boot-budget] prefix warmup complete \(elapsed)ms\n", stderr)
+        }
 
         if jit_check_debugged() && isDebuggerAttached() && getenv("MADEIRA_DETACHED") == nil {
             launchSteamProductRuntime()
@@ -2758,12 +2728,18 @@ struct ContentView: View {
 
         // Shipping Steam never boots Explorer or cmd.exe. This native-ARM64
         // Windows GUI bootstrap starts services.exe hidden, launches the real
-        // x64 steam.exe -bigpicture, and waits so wineserver stays alive.
+        // x64 steam.exe -gamepadui, and waits so wineserver stays alive.
         unsetenv("MADEIRA_USE_ARM64EC")
         unsetenv("MADEIRA_ARGS")
         setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)
         setenv("MADEIRA_DESKTOP", "1", 1)
         setenv("STEAMOS_IOS_PRODUCT", "1", 1)
+        setenv("STEAMIOS_RUNTIME_PROFILE", "steam", 1)
+        setenv("STEAMIOS_WARM_BOOT_TARGET_MS", "5000", 1)
+        // The failing trace parks Steam's loader in Darwin __ulock_wait2 while
+        // madsync is enabled, before any x64->EC transition. Use wineserver
+        // synchronization for Steam bootstrap until madsync is proven correct.
+        setenv("MADEIRA_INPROC_SYNC", "0", 1)
         setenv("MADEIRA_SCREEN_W", String(deskW), 1)
         setenv("MADEIRA_SCREEN_H", String(deskH), 1)
         setenv("STEAMOS_IOS_TOUCHSCREEN", "1", 1)

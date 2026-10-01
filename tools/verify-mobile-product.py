@@ -44,13 +44,15 @@ require("services.exe", LAUNCHER, "hidden Wine services prerequisite")
 require("-gamepadui", LAUNCHER, "Steam controller-first Big Picture launch")
 forbid(" -console", LAUNCHER, "Steam developer console launch flag")
 require(".steamios-steam-launched", LAUNCHER, "Steam launch marker")
-require('Text("Starting Big Picture")', CONTENT, "opaque Steam startup surface")
-require("Atomic product handoff", CONTENT, "black-frame-free Steam surface handoff")
+forbid('Text("Starting Big Picture")', CONTENT, "fake Big Picture startup text")
+forbid("private var steamLaunchSurface", CONTENT, "fake native Steam startup surface")
+forbid("SteamLaunchPalette", CONTENT, "fake native Steam launch palette")
+require("Real-Steam-only startup", CONTENT, "real-Steam-only surface handoff")
 require("bash build/steamios-launcher/build.sh", CLEAN_BUILD, "launcher clean-build step")
 forbid("steam-launch.bat", CONTENT, "cmd/batch Steam wrapper")
-require("winios_set_product_visible(0)", CONTENT, "hidden Wine compositor during startup")
+require("winios_set_product_visible(1)", CONTENT, "real Wine/Steam compositor owns startup")
 require("winios_set_product_visible(steamSettingsPresented ? 0 : 1)", CONTENT,
-        "Steam compositor reveal gate")
+        "Steam compositor settings visibility gate")
 require("let presentation = convert(gameRect(), to: w)", CONTENT,
         "shared Metal/compositor safe-area rectangle")
 require("void winios_set_product_visible(int visible);", WINIOS_H,
@@ -67,11 +69,17 @@ require("ml1140: NEVER call NtProtectVirtualMemory while holding", FEX_LOCK_PATC
 require("[iOS-xlock] ml1140", FEX_LOCK_PATCHER, "FEX unlocked-protection diagnostic")
 require("apply-fex-invalidation-lock.py",
         (ROOT / "build/fex-arm64ec/build.sh").read_text(), "ARM64EC FEX lock transformer")
-require(".steamios-runtime-ready-v1", WINE, "constant-time seeded-prefix marker")
+require(".steamios-runtime-ready-v2", WINE, "constant-time seeded-prefix marker")
 require("[prefix-fast] ml1141 READY", WINE, "constant-time prefix fast path")
-require("[prefix-clone] ml1142", WINE, "APFS-cloned first-install Steam materialization")
+require("[prefix-clone] ml1143", WINE, "first-install Steam materialization timing")
+require("clonefile(bundleSteam.fileSystemRepresentation", WINE,
+        "kernel APFS directory-clone fast path")
 require("copyItemAtPath:bundleSteam toPath:steamDir", WINE,
-        "Foundation clone-on-copy Steam materialization")
+        "Foundation fallback materialization")
+require("__wine_SvcctlStarted", LAUNCHER,
+        "upstream Wine SCM readiness event before Steam launch")
+require("wait_for_services_ready", LAUNCHER,
+        "bounded SCM event wait before Steam launch")
 require("STEAMIOS_EXPANDED_STEAM_STAGE_OK", CLEAN_BUILD,
         "expanded Steam app-resource staging")
 require("STEAMIOS_PACKAGED_EXPANDED_STEAM_OK", CLEAN_BUILD,

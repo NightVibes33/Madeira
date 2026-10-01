@@ -19,6 +19,7 @@
 #include <dirent.h>
 #include "../../build/madeira_cfg.h"   /* ml1095: one config file */
 #include <sys/stat.h>
+#include <sys/clonefile.h>
 #include <limits.h>
 #include <string.h>
 #include <stdio.h>
@@ -308,12 +309,67 @@ static char *g_prefix_path = NULL;
  * ActivatableClassId (Thumper aborts on RoGetActivationFactory for
  * Windows.Gaming.Input.Gamepad), and no Fonts keys (the #61/#70 dwrite fix).
  */
+
+static BOOL madeira_append_registry_profile(NSString *path, NSString *marker, NSString *block)
+{
+    NSError *error = nil;
+    NSMutableString *text = [NSMutableString stringWithContentsOfFile:path
+        encoding:NSUTF8StringEncoding error:&error];
+    if (!text) return NO;
+    if ([text containsString:marker]) return YES;
+    [text appendString:block];
+    return [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error];
+}
+
+static BOOL madeira_apply_windows11_profile(NSString *prefix)
+{
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *markerPath = [prefix stringByAppendingPathComponent:@".steamios-win11-26100-v1"];
+    if ([fm fileExistsAtPath:markerPath]) return YES;
+
+    NSString *systemReg = [prefix stringByAppendingPathComponent:@"system.reg"];
+    NSString *userReg = [prefix stringByAppendingPathComponent:@"user.reg"];
+    NSString *systemBlock =
+        @"\n# SteamIOS Windows 11 profile 26100 v1\n"
+         "[Software\\\\Microsoft\\\\Windows NT\\\\CurrentVersion]\n"
+         "\"CurrentBuild\"=\"26100\"\n"
+         "\"CurrentBuildNumber\"=\"26100\"\n"
+         "\"CurrentMajorVersionNumber\"=dword:0000000a\n"
+         "\"CurrentMinorVersionNumber\"=dword:00000000\n"
+         "\"DisplayVersion\"=\"24H2\"\n"
+         "\"ProductName\"=\"Windows 11 Pro\"\n";
+    NSString *userBlock =
+        @"\n# SteamIOS Wine win11 selector v1\n"
+         "[Software\\\\Wine]\n"
+         "\"Version\"=\"win11\"\n";
+
+    BOOL ok = madeira_append_registry_profile(systemReg,
+                  @"# SteamIOS Windows 11 profile 26100 v1", systemBlock) &&
+              madeira_append_registry_profile(userReg,
+                  @"# SteamIOS Wine win11 selector v1", userBlock);
+    if (ok)
+    {
+        [@"win11-26100" writeToFile:markerPath atomically:YES
+            encoding:NSUTF8StringEncoding error:nil];
+        dprintf(STDERR_FILENO, "[windows-profile] win11-26100 READY\n");
+    }
+    return ok;
+}
+
+/* Prefix provisioning is intentionally single-flight. startSteamAutomatically
+ * begins it in parallel with JIT; launchSteamProductRuntime calls the same
+ * function after JIT and either joins the in-flight work or returns through
+ * the constant-time ready marker. */
+static pthread_mutex_t g_steamios_prefix_seed_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void madeira_seed_prefix_if_needed(const char *prefix_path) {
+    if (!prefix_path) return;
+    pthread_mutex_lock(&g_steamios_prefix_seed_lock);
+
     @autoreleasepool {
-        if (!prefix_path) return;
         NSString *prefix = [NSString stringWithUTF8String:prefix_path];
         NSFileManager *fm = [NSFileManager defaultManager];
-        NSString *readyMarker = [prefix stringByAppendingPathComponent:@".steamios-runtime-ready-v1"];
+        NSString *readyMarker = [prefix stringByAppendingPathComponent:@".steamios-runtime-ready-v2"];
         NSString *stamp = [prefix stringByAppendingPathComponent:@".update-timestamp"];
         NSString *steamDir = [prefix stringByAppendingPathComponent:
             @"drive_c/Program Files (x86)/Steam"];
@@ -330,6 +386,7 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
             [fm fileExistsAtPath:systemReg] &&
             [fm fileExistsAtPath:userReg]) {
             dprintf(STDERR_FILENO, "[prefix-fast] ml1141 READY -- skipping seed/repair\n");
+            pthread_mutex_unlock(&g_steamios_prefix_seed_lock);
             return;
         }
 
@@ -376,14 +433,34 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
                 [fm removeItemAtPath:steamDir error:nil];
                 [fm createDirectoryAtPath:[steamDir stringByDeletingLastPathComponent]
                       withIntermediateDirectories:YES attributes:nil error:nil];
-                BOOL copied = [fm copyItemAtPath:bundleSteam toPath:steamDir error:&copyError];
+
+                /* The expanded Steam payload contains tens of thousands of
+                 * filesystem objects. Foundation correctly uses APFS clones for
+                 * file data, but still walks the hierarchy in userspace. Try one
+                 * clonefile(2) directory-hierarchy clone first; on APFS this lets
+                 * the kernel perform the COW clone. If the running iOS build
+                 * refuses directory cloning, remove any partial destination and
+                 * fall back to Foundation's proven copy path. */
+                errno = 0;
+                int cloneResult = clonefile(bundleSteam.fileSystemRepresentation,
+                                            steamDir.fileSystemRepresentation, 0);
+                int cloneErrno = cloneResult == 0 ? 0 : errno;
+                BOOL copied = cloneResult == 0;
+                const char *copyMode = copied ? "clonefile" : "FileManager-fallback";
+                if (!copied) {
+                    [fm removeItemAtPath:steamDir error:nil];
+                    copyError = nil;
+                    copied = [fm copyItemAtPath:bundleSteam toPath:steamDir error:&copyError];
+                }
+
                 steamReady = copied &&
                              [fm fileExistsAtPath:steamExe] &&
                              [fm fileExistsAtPath:steamClient] &&
                              [fm fileExistsAtPath:steamMarker];
                 dprintf(STDERR_FILENO,
-                    "[prefix-clone] ml1142 bundle->writable %.3fs copied=%d ready=%d err=%s\n",
-                    CFAbsoluteTimeGetCurrent() - t0, copied ? 1 : 0, steamReady ? 1 : 0,
+                    "[prefix-clone] ml1143 bundle->writable %.3fs mode=%s clone_errno=%d copied=%d ready=%d err=%s\n",
+                    CFAbsoluteTimeGetCurrent() - t0, copyMode, cloneErrno,
+                    copied ? 1 : 0, steamReady ? 1 : 0,
                     copyError ? copyError.localizedDescription.UTF8String : "none");
             }
 
@@ -411,13 +488,14 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
 
         madeira_repair_profile(prefix);
         madeira_undo_appdata_skeleton(prefix);
+        BOOL windowsProfileReady = madeira_apply_windows11_profile(prefix);
 
-        BOOL runtimeReady = steamReady &&
+        BOOL runtimeReady = steamReady && windowsProfileReady &&
                             [fm fileExistsAtPath:systemReg] &&
                             [fm fileExistsAtPath:userReg] &&
                             [fm fileExistsAtPath:cLink];
         if (runtimeReady) {
-            [@"steamios-runtime-ready-v1"
+            [@"steamios-runtime-ready-v2"
                 writeToFile:readyMarker atomically:YES
                 encoding:NSUTF8StringEncoding error:nil];
             dprintf(STDERR_FILENO, "[prefix-fast] ml1141 armed\n");
@@ -426,6 +504,7 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
             dprintf(STDERR_FILENO, "[prefix-fast] ml1141 NOT READY\n");
         }
     }
+    pthread_mutex_unlock(&g_steamios_prefix_seed_lock);
 }
 
 /* ===========================================================================
@@ -775,6 +854,16 @@ static void *wine_process_thread(void *arg) {
 
         // Skip check_command_line / reexec_loader
         setenv("WINELOADERNOEXEC", "1", 1);
+
+        /* Hangover-compatible CPU-module boundary.
+         * The clean build ports HODLL/HODLL64 lookup into the iOS Wine fork;
+         * canonical FEX names are shipped alongside legacy xtajit aliases.
+         * Keep this invisible to the product UI and fail closed if FEX/JIT is
+         * unavailable rather than falling back to an interpreter. */
+        setenv("HODLL64", "libarm64ecfex.dll", 1);
+        setenv("HODLL", "libwow64fex.dll", 1);
+        setenv("STEAMOS_WINDOWS_PROFILE", "win11-26100", 1);
+        LOG("Hangover CPU modules: HODLL64=libarm64ecfex.dll HODLL=libwow64fex.dll");
 
         // Set DLL search path to app bundle (contains aarch64-windows/ with PE DLLs)
         {

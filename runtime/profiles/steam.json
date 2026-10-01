@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "name": "SteamIOS production Steam profile",
+  "windows": {
+    "version": "win11",
+    "build": 26100
+  },
+  "translator": {
+    "x64": "libarm64ecfex.dll",
+    "x86": "libwow64fex.dll",
+    "jit": "required",
+    "interpreter_fallback": false
+  },
+  "steam": {
+    "client": "official Windows Steam",
+    "ui": "-gamepadui",
+    "console": false,
+    "cef": {
+      "sandbox": false,
+      "gpu": false,
+      "jitless": true
+    },
+    "prefix": "single persistent Windows machine",
+    "app_identity": "Steam is authoritative for child AppID"
+  },
+  "startup": {
+    "target_first_real_big_picture_frame_ms": 5000,
+    "native_launch_surface_immediate": true,
+    "hide": [
+      "Wine desktop",
+      "cmd.exe",
+      "console",
+      "black transition",
+      "wineboot UI"
+    ],
+    "parallel": [
+      "JIT pool",
+      "Metal/CAMetalLayer",
+      "prefix validation",
+      "Steam payload validation",
+      "CoreAudio/GameController"
+    ]
+  },
+  "input": {
+    "bluetooth_controllers": true,
+    "physical_framework": "GameController",
+    "bridges": [
+      "XInput",
+      "DirectInput",
+      "HID",
+      "Windows.Gaming.Input"
+    ],
+    "touch": true,
+    "keyboard": true,
+    "mouse": true,
+    "multiple_controllers": true,
+    "hotplug": true,
+    "rumble": "XInputSetState -> CoreHaptics when supported",
+    "battery": "XInputGetBatteryInformation <- GameController battery when available"
+  },
+  "graphics": {
+    "d3d11": "DXMT -> Metal",
+    "d3d12": "Madeira D3D12 -> Metal",
+    "fallback": "lazy per-game only; never initialize Vulkan stack during Steam boot"
+  }
+}

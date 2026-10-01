@@ -105,12 +105,39 @@ jobs:
       - name: Verify FEX + Wine ARM64EC + WoW64 payload
         shell: bash
         run: |
-          test "$(git ls-tree HEAD FEX | awk '{print $3}')" = "2838f3be52437620348264ada6c41042a9085290"
-          test "$(git ls-tree HEAD wine | awk '{print $3}')" = "8e3d23c77ceb903b59fdd8c123c867b7591490d5"
+          test "$(git ls-tree HEAD FEX | awk '{print $3}')" = "26859e184ad90f0e811d7f8bbd943a4b1573a2c3"
+          test "$(git ls-tree HEAD wine | awk '{print $3}')" = "4f5b19718f4de88ecc5cb0dc08b119497a67ba8f"
           test -s app/Madeira/aarch64-windows/wow64.dll
           test -s app/Madeira/aarch64-windows/wow64win.dll
           test -s app/Madeira/aarch64-windows/xtajit.dll
           test -s app/Madeira/arm64ec-windows/xtajit64.dll
+
+      - name: Verify Hangover convergence contract
+        shell: bash
+        run: |
+          test -s runtime/runtime-lock.json
+          test -s runtime/profiles/steam.json
+          test -s runtime/profiles/default-game.json
+          test -s tools/patches/apply-hangover-wine.py
+          grep -F 'HODLL64' tools/patches/apply-hangover-wine.py
+          grep -F 'HODLL' tools/patches/apply-hangover-wine.py
+          grep -F 'libarm64ecfex.dll' build/fex-arm64ec/build.sh
+          grep -F 'libwow64fex.dll' build/fex-wow64/build.sh
+          grep -F 'setenv("HODLL64", "libarm64ecfex.dll", 1)' app/Madeira/WineProcessBridge.m
+          grep -F 'setenv("HODLL", "libwow64fex.dll", 1)' app/Madeira/WineProcessBridge.m
+          grep -F 'python3 tools/patches/apply-hangover-wine.py "$PWD/wine"' .github/workflows/steamos-ios-app.yml
+          grep -F 'STEAMOS_HANGOVER_WINE_SOURCE_READY' .github/workflows/steamos-ios-app.yml
+          grep -F 'steamios-i386-farm-xcode27-v2-' .github/workflows/steamos-ios-app.yml
+          grep -F 'steamios-runtime-xcode27-v5-' .github/workflows/steamos-ios-app.yml
+          python3 tools/verify-hangover-port.py
+          python3 build/host-tests/check-gamepad.py
+          test -s runtime/runtime-pack.json
+          grep -F 'startWirelessControllerDiscovery' app/Madeira/GamepadInput.swift
+          grep -F 'SteamIOSControllerHaptics' app/Madeira/GamepadInput.swift
+          grep -F 'NtUserGamepadOp_Vibration' tools/patches/apply-hangover-wine.py
+          grep -F 'NtUserGamepadOp_Battery' tools/patches/apply-hangover-wine.py
+          grep -F 'XInputGetBatteryInformation' docs/CONTROLLERS.md
+          grep -F '[boot-budget]' app/Madeira/ContentView.swift
 
       - name: Verify normal Steam launch has no research probes
         shell: bash
@@ -120,6 +147,8 @@ jobs:
           grep -F '"MADEIRA_DUMP_SURFACES", "MADEIRA_SURF_SEQ"' app/Madeira/ContentView.swift
           grep -F '"MADEIRA_DEAD_RELEASE", "MADEIRA_SRCWATCH", "MADEIRA_SRCWATCH_ROWS"' app/Madeira/ContentView.swift
           grep -F 'setenv("MADEIRA_JITLESS", "1", 1)' app/Madeira/ContentView.swift
+          grep -F 'setenv("MADEIRA_INPROC_SYNC", "0", 1)' app/Madeira/ContentView.swift
+          grep -F 'MADEIRA_INPROC_SYNC' build/madsync/madsync.c
           ! grep -F 'setenv("MADEIRA_SURF_SEQ"' app/Madeira/ContentView.swift
           ! grep -F 'setenv("MADEIRA_IRCAP_RVA"' app/Madeira/ContentView.swift
 
@@ -137,9 +166,15 @@ jobs:
           grep -F -- '-gamepadui' build/steamios-launcher/steamios-launcher.c
           grep -F '.steamios-steam-launched' build/steamios-launcher/steamios-launcher.c
           ! grep -F -- ' -console' build/steamios-launcher/steamios-launcher.c
-          grep -F 'private var steamLaunchSurface' app/Madeira/ContentView.swift
-          grep -F 'Text("Starting Big Picture")' app/Madeira/ContentView.swift
-          grep -F 'Atomic product handoff' app/Madeira/ContentView.swift
+          ! grep -F 'private var steamLaunchSurface' app/Madeira/ContentView.swift
+          ! grep -F 'Text("Starting Big Picture")' app/Madeira/ContentView.swift
+          ! grep -F 'SteamLaunchPalette' app/Madeira/ContentView.swift
+          grep -F 'winios_set_product_visible(1)' app/Madeira/ContentView.swift
+          grep -F 'clonefile(bundleSteam.fileSystemRepresentation' app/Madeira/WineProcessBridge.m
+          grep -F '__wine_SvcctlStarted' build/steamios-launcher/steamios-launcher.c
+          grep -F 'wait_for_services_ready' build/steamios-launcher/steamios-launcher.c
+          grep -F 'Wine Service Control Manager did not become ready' build/steamios-launcher/steamios-launcher.c
+          grep -F 'Real-Steam-only startup' app/Madeira/ContentView.swift
           ! grep -F 'steam-launch.bat' app/Madeira/ContentView.swift
           grep -F 'winios_set_product_visible(0)' app/Madeira/ContentView.swift
           grep -F 'winios_set_product_visible(steamSettingsPresented ? 0 : 1)' app/Madeira/ContentView.swift
@@ -152,9 +187,9 @@ jobs:
           grep -F 'FEX_IOS_INTERVAL_LOCK_PATCH_REFUSED' tools/patches/apply-fex-invalidation-lock.py
           grep -F 'ml1140: NEVER call NtProtectVirtualMemory while holding' tools/patches/apply-fex-invalidation-lock.py
           grep -F '[iOS-xlock] ml1140' tools/patches/apply-fex-invalidation-lock.py
-          grep -F '.steamios-runtime-ready-v1' app/Madeira/WineProcessBridge.m
+          grep -F '.steamios-runtime-ready-v2' app/Madeira/WineProcessBridge.m
           grep -F '[prefix-fast] ml1141 READY' app/Madeira/WineProcessBridge.m
-          grep -F '[prefix-clone] ml1142' app/Madeira/WineProcessBridge.m
+          grep -F '[prefix-clone] ml1143' app/Madeira/WineProcessBridge.m
           grep -F 'copyItemAtPath:bundleSteam toPath:steamDir' app/Madeira/WineProcessBridge.m
           grep -F 'STEAMIOS_EXPANDED_STEAM_STAGE_OK' build/steamos-ios/build-clean-app.sh
           grep -F 'STEAMIOS_PACKAGED_EXPANDED_STEAM_OK' build/steamos-ios/build-clean-app.sh
