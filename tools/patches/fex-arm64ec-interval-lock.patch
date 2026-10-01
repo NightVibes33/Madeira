@@ -1,0 +1,117 @@
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+index 2f91534e7..000000000 100644
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -764,38 +764,69 @@ void InvalidationTracker::InvalidateIntervalInternalLocked(uint64_t Address, ui
+ }
+ 
+ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t Size, bool ForWriteLocked) {
++  /* iOS-Madeira ml1140: NEVER call NtProtectVirtualMemory while holding
++   * IntervalsLock.
++   *
++   * On Windows this function historically kept a shared lock for the entire
++   * walk. In the iOS/Wine integration NtProtectVirtualMemory synchronously
++   * feeds BTCpuNotifyMemoryProtect back into HandleMemoryProtectionNotification,
++   * which needs this same mutex exclusively. Steam's first ARM64EC thread then
++   * parked forever in os_sync_wait_on_address at InvalidationTracker+0x38.
++   *
++   * Snapshot one interval under the shared lock, release it, then perform the
++   * protection change. Re-query after each protection so a synchronous
++   * notification is free to update the interval lists without deadlocking or
++   * leaving this walk with stale iterators. */
+   const auto End = Address + Size;
+-  std::shared_lock Lock(IntervalsLock);
+-
+-  if (SMCDetectionDisabled) {
+-    return false;
+-  }
++  const auto Begin = Address;
+ 
+   bool HitRWXInterval = false;
+-  do {
+-    const auto Query = RWXIntervals.Query(Address);
+-    if (Query.Enclosed) {
+-      if (!HitRWXInterval) {
+-        if (ForWriteLocked) {
+-          // If we are protecting as writable, then the entire range must be invalidated before any protections are
+-          // applied and the invalidation mutex must be locked throughout.
+-          // Do this lazily only when an RWX region is actually hit.
+-          // NOTE: This assumes CodeInvalidationMutex is locked by the caller
+-          InvalidateIntervalInternalLocked(Address, Size);
++  bool InvalidatedForWrite = false;
++  while (Address < End) {
++    uint64_t Advance = 0;
++    SIZE_T ProtectSize = 0;
++    ULONG NewProtection = 0;
++
++    {
++      std::shared_lock Lock(IntervalsLock);
++      if (SMCDetectionDisabled) {
++        return HitRWXInterval;
++      }
++
++      const auto Query = RWXIntervals.Query(Address);
++      if (Query.Enclosed) {
++        HitRWXInterval = true;
++        ProtectSize = static_cast<SIZE_T>(std::min<uint64_t>(End - Address, Query.Size));
++        Advance = ProtectSize;
++        NewProtection = ForWriteLocked ? GetUntrapProt(Address) : GetTrapProt(Address);
++      } else if (!Query.Size) {
++        break;
++      } else {
++        Advance = std::min<uint64_t>(End - Address, Query.Size);
++      }
++    } /* IntervalsLock MUST be released before NtProtectVirtualMemory. */
++
++    if (ProtectSize) {
++      if (ForWriteLocked && !InvalidatedForWrite) {
++        /* Caller owns CodeInvalidationMutex on this path. Invalidate the whole
++         * requested range once, before the first write-untrap. */
++        InvalidateIntervalInternalLocked(Begin, Size);
++        InvalidatedForWrite = true;
++      }
++
++      void* TmpAddress = reinterpret_cast<void*>(Address);
++      SIZE_T TmpSize = ProtectSize;
++      ULONG TmpProt;
++      const auto Status = NtProtectVirtualMemory(
++        NtCurrentProcess(), &TmpAddress, &TmpSize, NewProtection, &TmpProt);
++#ifdef FEX_IOS_HOST
++      static std::atomic<uint32_t> IOSUnlockedProtectCount {0};
++      const auto N = IOSUnlockedProtectCount.fetch_add(1, std::memory_order_relaxed) + 1;
++      if (N <= 8) {
++        LogMan::Msg::EFmt("[iOS-xlock] ml1140 #{} protect={:#x}+{:#x} new={:#x} status={:#x} lock=RELEASED",
++                          N, Address, ProtectSize, NewProtection, static_cast<uint32_t>(Status));
++      }
++#endif
++    }
++
++    if (!Advance) {
++      /* IntervalList::Query guarantees a positive distance unless no more
++       * intervals exist. Keep this guard so corrupted metadata can't spin. */
++      break;
++    }
++    Address += Advance;
++  }
++
++  return HitRWXInterval;
++}
+-        }
+-        HitRWXInterval = true;
+-      }
+-      void* TmpAddress = reinterpret_cast<void*>(Address);
+-      SIZE_T TmpSize = static_cast<SIZE_T>(std::min(End, Address + Query.Size) - Address);
+-      ULONG TmpProt;
+-      NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, ForWriteLocked ? GetUntrapProt(Address) : GetTrapProt(Address), &TmpProt);
+-    } else if (!Query.Size) {
+-      // No more regions past `Address` in the interval list
+-      break;
+-    }
+-
+-    Address += Query.Size;
+-  } while (Address < End);
+-
+-  return HitRWXInterval;
+-}
+ 
+ } // namespace FEX::Windows

@@ -312,8 +312,32 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
     @autoreleasepool {
         if (!prefix_path) return;
         NSString *prefix = [NSString stringWithUTF8String:prefix_path];
-        NSString *stamp = [prefix stringByAppendingPathComponent:@".update-timestamp"];
         NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *readyMarker = [prefix stringByAppendingPathComponent:@".steamios-runtime-ready-v1"];
+        NSString *stamp = [prefix stringByAppendingPathComponent:@".update-timestamp"];
+        NSString *steamDir = [prefix stringByAppendingPathComponent:
+            @"drive_c/Program Files (x86)/Steam"];
+        NSString *steamExe = [steamDir stringByAppendingPathComponent:@"steam.exe"];
+        NSString *steamClient = [steamDir stringByAppendingPathComponent:@"steamclient64.dll"];
+        NSString *steamMarker = [steamDir stringByAppendingPathComponent:@".steamios-bundled-client"];
+        NSString *systemReg = [prefix stringByAppendingPathComponent:@"system.reg"];
+        NSString *userReg = [prefix stringByAppendingPathComponent:@"user.reg"];
+
+        /* ml1141: the normal repeat-launch path must be O(1). The old code
+         * re-entered repair/profile/dosdevice work every launch and relied on a
+         * Wine-owned timestamp as the only extraction sentinel. Once the exact
+         * shipping runtime has been validated, three cheap existence checks are
+         * enough; c: is a relative symlink inside the same prefix and survives
+         * app updates/container UUID changes. */
+        if ([fm fileExistsAtPath:readyMarker] &&
+            [fm fileExistsAtPath:steamExe] &&
+            [fm fileExistsAtPath:steamClient] &&
+            [fm fileExistsAtPath:steamMarker] &&
+            [fm fileExistsAtPath:systemReg] &&
+            [fm fileExistsAtPath:userReg]) {
+            dprintf(STDERR_FILENO, "[prefix-fast] ml1141 READY -- skipping seed/repair\n");
+            return;
+        }
 
         [fm createDirectoryAtPath:prefix withIntermediateDirectories:YES attributes:nil error:nil];
 
@@ -323,23 +347,24 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
                 LOG("prefix-template.tar.gz missing from bundle!");
             } else {
                 LOG("Seeding prefix from %{public}s", tgz.UTF8String);
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
                 if (madeira_extract_prefix_tgz(tgz.UTF8String, prefix_path) != 0) {
                     LOG("prefix extraction FAILED");
                 } else {
+                    /* Never depend on the archive carrying Wine's sentinel.
+                     * Backfill it explicitly after a successful extraction. */
+                    if (![fm fileExistsAtPath:stamp])
+                        [@"steamios" writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                    dprintf(STDERR_FILENO,
+                        "[prefix-seed] ml1141 full extract %.3fs\n",
+                        CFAbsoluteTimeGetCurrent() - t0);
                     LOG("prefix seeded to %{public}s", prefix_path);
                 }
             }
         }
 
-        /* SteamIOS shipping path: the complete Valve Win64 client is part of
-         * prefix-template.tar.gz. Existing app containers may have a prefix
-         * created by an older IPA that only bundled SteamSetup.exe. Repair just
-         * the Steam subtree in that case; never overwrite registry/user data. */
-        NSString *steamDir = [prefix stringByAppendingPathComponent:
-            @"drive_c/Program Files (x86)/Steam"];
-        NSString *steamExe = [steamDir stringByAppendingPathComponent:@"steam.exe"];
-        NSString *steamClient = [steamDir stringByAppendingPathComponent:@"steamclient64.dll"];
-        NSString *steamMarker = [steamDir stringByAppendingPathComponent:@".steamios-bundled-client"];
+        /* Existing app containers may have a prefix created by an older IPA.
+         * Repair only the Steam subtree when the core prefix already exists. */
         BOOL steamReady = [fm fileExistsAtPath:steamExe] &&
                           [fm fileExistsAtPath:steamClient] &&
                           [fm fileExistsAtPath:steamMarker];
@@ -348,6 +373,7 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
                 LOG("Steam migration unavailable: prefix-template.tar.gz missing");
             } else {
                 LOG("Repairing bundled Steam client into existing Wine prefix...");
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
                 int src = madeira_extract_prefix_subtree_tgz(
                     tgz.UTF8String, prefix_path,
                     "drive_c/Program Files (x86)/Steam");
@@ -355,6 +381,9 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
                               [fm fileExistsAtPath:steamExe] &&
                               [fm fileExistsAtPath:steamClient] &&
                               [fm fileExistsAtPath:steamMarker]);
+                dprintf(STDERR_FILENO,
+                    "[prefix-seed] ml1141 Steam subtree extract %.3fs ready=%d\n",
+                    CFAbsoluteTimeGetCurrent() - t0, steamReady ? 1 : 0);
                 if (steamReady)
                     LOG("Bundled Steam client ready at %{public}s", steamDir.UTF8String);
                 else
@@ -362,19 +391,28 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
             }
         }
 
-        // (Re)create dosdevices/c: -> ../drive_c. The tarball omits
-        // dosdevices because Mac's z: -> / is wrong here.
         NSString *dosdev = [prefix stringByAppendingPathComponent:@"dosdevices"];
         [fm createDirectoryAtPath:dosdev withIntermediateDirectories:YES attributes:nil error:nil];
         NSString *cLink = [dosdev stringByAppendingPathComponent:@"c:"];
         [fm removeItemAtPath:cLink error:nil];
         [fm createSymbolicLinkAtPath:cLink withDestinationPath:@"../drive_c" error:nil];
 
-        /* ml666: repair the usersmadeira escaping damage BEFORE anything reads
-         * the registry, then the (now scoped) ml581 legacy cleanup. */
-        madeira_repair_profile( prefix );
-        /* ml581: see madeira_undo_appdata_skeleton() above. */
-        madeira_undo_appdata_skeleton( prefix );
+        madeira_repair_profile(prefix);
+        madeira_undo_appdata_skeleton(prefix);
+
+        BOOL runtimeReady = steamReady &&
+                            [fm fileExistsAtPath:systemReg] &&
+                            [fm fileExistsAtPath:userReg] &&
+                            [fm fileExistsAtPath:cLink];
+        if (runtimeReady) {
+            [@"steamios-runtime-ready-v1"
+                writeToFile:readyMarker atomically:YES
+                encoding:NSUTF8StringEncoding error:nil];
+            dprintf(STDERR_FILENO, "[prefix-fast] ml1141 armed\n");
+        } else {
+            [fm removeItemAtPath:readyMarker error:nil];
+            dprintf(STDERR_FILENO, "[prefix-fast] ml1141 NOT READY\n");
+        }
     }
 }
 
