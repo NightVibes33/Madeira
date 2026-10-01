@@ -1,2 +1,2 @@
-trigger=steamios-fast-component-cache-20261001-v1
-purpose=build-loader-dedup-with-split-caches-and-apfs-packaging
+trigger=steamios-fast-component-cache-20261001-v2
+purpose=verify-split-cache-invariants-and-loader-dedup-build
