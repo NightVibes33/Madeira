@@ -185,62 +185,36 @@ PY
 # Expand the base Wine prefix and the fully-updated Steam archive, replace only
 # the Steam subtree, then rebuild one self-contained prefix archive.
 PREFIX_TEMPLATE="$R/app/Madeira/prefix-template.tar.gz"
-PREFIX_WORK="$(mktemp -d)"
-STEAM_WORK="$(mktemp -d)"
-PREFIX_NEW="$R/app/Madeira/prefix-template.tar.gz.full-steam"
-trap 'rm -rf "$PREFIX_WORK" "$STEAM_WORK" "$PREFIX_NEW"' EXIT
+STEAM_BUNDLE_STAGE="$R/build/steamos-expanded-steam"
+rm -rf "$STEAM_BUNDLE_STAGE"
+mkdir -p "$STEAM_BUNDLE_STAGE"
+tar -xzf "$STEAM_PAYLOAD" -C "$STEAM_BUNDLE_STAGE"
 
-tar -xzf "$PREFIX_TEMPLATE" -C "$PREFIX_WORK"
-tar -xzf "$STEAM_PAYLOAD" -C "$STEAM_WORK"
-
-DRIVE_C="$(find "$PREFIX_WORK" -type d -name drive_c -print -quit)"
-STEAM_SOURCE="$STEAM_WORK/Steam"
-if [ -z "$DRIVE_C" ] || [ ! -d "$DRIVE_C" ]; then
-  echo "error: prefix-template.tar.gz has no drive_c" >&2
-  exit 1
-fi
-test -d "$STEAM_SOURCE" || {
-  echo "error: SteamPayload.tar.gz has no Steam root" >&2
+STEAM_SOURCE="$STEAM_BUNDLE_STAGE/Steam"
+test -d "$STEAM_SOURCE" || { echo "error: SteamPayload.tar.gz has no Steam root" >&2; exit 1; }
+cp "$STEAM_PAYLOAD_META" "$STEAM_SOURCE/.steamios-bundled-client"
+test -s "$STEAM_SOURCE/steam.exe"
+test -s "$STEAM_SOURCE/steamclient64.dll"
+test -s "$STEAM_SOURCE/.steamios-bundled-client"
+find "$STEAM_SOURCE" -type f -iname 'steamwebhelper.exe' -print -quit | grep -q . || {
+  echo "error: expanded Steam resource has no steamwebhelper.exe" >&2
   exit 1
 }
 
-STEAM_DEST="$DRIVE_C/Program Files (x86)/Steam"
-rm -rf "$STEAM_DEST"
-mkdir -p "$(dirname "$STEAM_DEST")"
-/usr/bin/ditto "$STEAM_SOURCE" "$STEAM_DEST"
-cp "$STEAM_PAYLOAD_META" "$STEAM_DEST/.steamios-bundled-client"
-
-test -s "$STEAM_DEST/steam.exe"
-test -s "$STEAM_DEST/steamclient64.dll"
-test -s "$STEAM_DEST/.steamios-bundled-client"
-find "$STEAM_DEST" -type f -iname 'steamwebhelper.exe' -print -quit | grep -q . || {
-  echo "error: merged Steam tree has no steamwebhelper.exe" >&2
-  exit 1
-}
-
-# The in-app extractor understands ustar prefix fields; avoid pax metadata so
-# migration of the Steam subtree into an older prefix is deterministic.
-if [ -d "$PREFIX_WORK/prefix" ]; then
-  tar --format=ustar -czf "$PREFIX_NEW" -C "$PREFIX_WORK" prefix
-else
-  tar --format=ustar -czf "$PREFIX_NEW" -C "$PREFIX_WORK" .
-fi
-mv "$PREFIX_NEW" "$PREFIX_TEMPLATE"
-
+# Steam stays OUT of the gzip prefix. Installation expands the IPA once;
+# first launch then uses APFS clone-on-copy into the writable Wine prefix.
 PREFIX_LIST="$(mktemp)"
 tar -tzf "$PREFIX_TEMPLATE" > "$PREFIX_LIST"
-for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
-  grep -Fq "$required" "$PREFIX_LIST" || {
-    echo "error: rebuilt prefix missing $required" >&2
-    exit 1
-  }
-done
-grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' "$PREFIX_LIST" || {
-  echo "error: rebuilt prefix missing steamwebhelper.exe" >&2
+grep -Fq 'prefix/.update-timestamp' "$PREFIX_LIST" || {
+  echo "error: base prefix template is missing .update-timestamp" >&2
   exit 1
 }
-steam_tree_bytes="$(du -sk "$STEAM_DEST" | awk '{print $1 * 1024}')"
-echo "STEAMIOS_PREFIX_FULL_STEAM_OK bytes=$steam_tree_bytes archive=$(stat -f%z "$PREFIX_TEMPLATE")"
+if grep -Fq 'drive_c/Program Files (x86)/Steam/steam.exe' "$PREFIX_LIST"; then
+  echo "error: Steam is embedded in prefix-template.tar.gz; fast first launch is defeated" >&2
+  exit 1
+fi
+steam_tree_bytes="$(du -sk "$STEAM_SOURCE" | awk '{print $1 * 1024}')"
+echo "STEAMIOS_EXPANDED_STEAM_STAGE_OK bytes=$steam_tree_bytes"
 
 # Materialize the SteamIOS app icon from the exact user-supplied JPEG source.
 # Keep the source bytes in git and let macOS/Xcode produce the required 1024 PNG.
@@ -270,28 +244,38 @@ test -d "$APP"
 test -s "$APP/Info.plist"
 test -s "$APP/SteamIOS"
 
+rm -rf "$APP/SteamPayload"
+mkdir -p "$APP/SteamPayload"
+/usr/bin/ditto "$STEAM_SOURCE" "$APP/SteamPayload/Steam"
+test -s "$APP/SteamPayload/Steam/steam.exe"
+test -s "$APP/SteamPayload/Steam/steamclient64.dll"
+test -s "$APP/SteamPayload/Steam/.steamios-bundled-client"
+find "$APP/SteamPayload/Steam" -type f -iname 'steamwebhelper.exe' -print -quit | grep -q . || {
+  echo "error: packaged expanded Steam resources have no steamwebhelper.exe" >&2
+  exit 1
+}
+echo "STEAMIOS_PACKAGED_EXPANDED_STEAM_OK bytes=$(du -sk "$APP/SteamPayload/Steam" | awk '{print $1 * 1024}')"
+
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
 [ "$bundle_id" = "com.nightvibes33.steamios" ] || {
   echo "error: packaged bundle id is '$bundle_id' (expected com.nightvibes33.steamios)" >&2
   exit 1
 }
 test -s "$APP/prefix-template.tar.gz" || {
-  echo "error: packaged prefix template missing" >&2
+  echo "error: packaged base prefix template missing" >&2
   exit 1
 }
 PACKAGED_PREFIX_LIST="$(mktemp)"
 tar -tzf "$APP/prefix-template.tar.gz" > "$PACKAGED_PREFIX_LIST"
-for required in   'drive_c/Program Files (x86)/Steam/steam.exe'   'drive_c/Program Files (x86)/Steam/steamclient64.dll'   'drive_c/Program Files (x86)/Steam/.steamios-bundled-client'; do
-  grep -Fq "$required" "$PACKAGED_PREFIX_LIST" || {
-    echo "error: packaged full Steam client missing $required" >&2
-    exit 1
-  }
-done
-grep -Eiq 'drive_c/Program Files \(x86\)/Steam/.*/steamwebhelper\.exe$' "$PACKAGED_PREFIX_LIST" || {
-  echo "error: packaged full Steam client missing steamwebhelper.exe" >&2
+grep -Fq 'prefix/.update-timestamp' "$PACKAGED_PREFIX_LIST" || {
+  echo "error: packaged base prefix is missing .update-timestamp" >&2
   exit 1
 }
-echo "STEAMIOS_PACKAGED_FULL_STEAM_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
+if grep -Fq 'drive_c/Program Files (x86)/Steam/steam.exe' "$PACKAGED_PREFIX_LIST"; then
+  echo "error: packaged prefix still embeds Steam; device would have to decompress it" >&2
+  exit 1
+fi
+echo "STEAMIOS_PACKAGED_FAST_PREFIX_OK bytes=$(stat -f%z "$APP/prefix-template.tar.gz")"
 
 test -s "$APP/Assets.car" || {
   echo "error: compiled asset catalog missing; SteamIOS app icon was not packaged" >&2

@@ -64,6 +64,17 @@ require("fex-arm64ec-interval-lock.patch",
         (ROOT / "build/fex-arm64ec/build.sh").read_text(), "ARM64EC FEX lock patch application")
 require(".steamios-runtime-ready-v1", WINE, "constant-time seeded-prefix marker")
 require("[prefix-fast] ml1141 READY", WINE, "constant-time prefix fast path")
+require("[prefix-clone] ml1142", WINE, "APFS-cloned first-install Steam materialization")
+require("copyItemAtPath:bundleSteam toPath:steamDir", WINE,
+        "Foundation clone-on-copy Steam materialization")
+require("STEAMIOS_EXPANDED_STEAM_STAGE_OK", CLEAN_BUILD,
+        "expanded Steam app-resource staging")
+require("STEAMIOS_PACKAGED_EXPANDED_STEAM_OK", CLEAN_BUILD,
+        "expanded Steam packaging gate")
+require("STEAMIOS_PACKAGED_FAST_PREFIX_OK", CLEAN_BUILD,
+        "lightweight prefix packaging gate")
+forbid("STEAMIOS_PREFIX_FULL_STEAM_OK", CLEAN_BUILD,
+       "legacy full-Steam-in-prefix packaging")
 for legacy in (
     "Install Madeira via SideStore or Xcode",
     "Reinstall Madeira with the same IPA",

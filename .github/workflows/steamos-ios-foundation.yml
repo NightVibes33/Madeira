@@ -149,6 +149,12 @@ jobs:
           grep -F '[iOS-xlock] ml1140' tools/patches/fex-arm64ec-interval-lock.patch
           grep -F '.steamios-runtime-ready-v1' app/Madeira/WineProcessBridge.m
           grep -F '[prefix-fast] ml1141 READY' app/Madeira/WineProcessBridge.m
+          grep -F '[prefix-clone] ml1142' app/Madeira/WineProcessBridge.m
+          grep -F 'copyItemAtPath:bundleSteam toPath:steamDir' app/Madeira/WineProcessBridge.m
+          grep -F 'STEAMIOS_EXPANDED_STEAM_STAGE_OK' build/steamos-ios/build-clean-app.sh
+          grep -F 'STEAMIOS_PACKAGED_EXPANDED_STEAM_OK' build/steamos-ios/build-clean-app.sh
+          grep -F 'STEAMIOS_PACKAGED_FAST_PREFIX_OK' build/steamos-ios/build-clean-app.sh
+          ! grep -F 'STEAMIOS_PREFIX_FULL_STEAM_OK' build/steamos-ios/build-clean-app.sh
 
       - name: Verify preinstalled Steam shipping path
         shell: bash

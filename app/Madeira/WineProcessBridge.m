@@ -323,12 +323,6 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
         NSString *systemReg = [prefix stringByAppendingPathComponent:@"system.reg"];
         NSString *userReg = [prefix stringByAppendingPathComponent:@"user.reg"];
 
-        /* ml1141: the normal repeat-launch path must be O(1). The old code
-         * re-entered repair/profile/dosdevice work every launch and relied on a
-         * Wine-owned timestamp as the only extraction sentinel. Once the exact
-         * shipping runtime has been validated, three cheap existence checks are
-         * enough; c: is a relative symlink inside the same prefix and survives
-         * app updates/container UUID changes. */
         if ([fm fileExistsAtPath:readyMarker] &&
             [fm fileExistsAtPath:steamExe] &&
             [fm fileExistsAtPath:steamClient] &&
@@ -341,38 +335,60 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
 
         [fm createDirectoryAtPath:prefix withIntermediateDirectories:YES attributes:nil error:nil];
 
+        /* New shipping prefix is intentionally small: registry + user/directory
+         * skeleton only. Its extraction should be sub-second rather than the
+         * previous 900MB Steam-in-gzip path. */
         NSString *tgz = [[NSBundle mainBundle] pathForResource:@"prefix-template" ofType:@"tar.gz"];
         if (![fm fileExistsAtPath:stamp]) {
             if (!tgz) {
                 LOG("prefix-template.tar.gz missing from bundle!");
             } else {
-                LOG("Seeding prefix from %{public}s", tgz.UTF8String);
                 CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
                 if (madeira_extract_prefix_tgz(tgz.UTF8String, prefix_path) != 0) {
                     LOG("prefix extraction FAILED");
                 } else {
-                    /* Never depend on the archive carrying Wine's sentinel.
-                     * Backfill it explicitly after a successful extraction. */
                     if (![fm fileExistsAtPath:stamp])
                         [@"steamios" writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                    dprintf(STDERR_FILENO,
-                        "[prefix-seed] ml1141 full extract %.3fs\n",
-                        CFAbsoluteTimeGetCurrent() - t0);
-                    LOG("prefix seeded to %{public}s", prefix_path);
+                    dprintf(STDERR_FILENO, "[prefix-seed] ml1142 base extract %.3fs\n",
+                            CFAbsoluteTimeGetCurrent() - t0);
                 }
             }
         }
 
-        /* Existing app containers may have a prefix created by an older IPA.
-         * Repair only the Steam subtree when the core prefix already exists. */
         BOOL steamReady = [fm fileExistsAtPath:steamExe] &&
                           [fm fileExistsAtPath:steamClient] &&
                           [fm fileExistsAtPath:steamMarker];
+
         if (!steamReady) {
-            if (!tgz) {
-                LOG("Steam migration unavailable: prefix-template.tar.gz missing");
-            } else {
-                LOG("Repairing bundled Steam client into existing Wine prefix...");
+            NSString *bundleSteam = [[[NSBundle mainBundle] resourcePath]
+                stringByAppendingPathComponent:@"SteamPayload/Steam"];
+            BOOL bundleSteamReady =
+                [fm fileExistsAtPath:[bundleSteam stringByAppendingPathComponent:@"steam.exe"]] &&
+                [fm fileExistsAtPath:[bundleSteam stringByAppendingPathComponent:@"steamclient64.dll"]] &&
+                [fm fileExistsAtPath:[bundleSteam stringByAppendingPathComponent:@".steamios-bundled-client"]];
+
+            if (bundleSteamReady) {
+                /* ml1142: Foundation's copyItem automatically uses cloning on
+                 * APFS. The result is a normal writable Steam tree whose
+                 * unchanged data blocks are shared with the app resource. */
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+                NSError *copyError = nil;
+                [fm removeItemAtPath:steamDir error:nil];
+                [fm createDirectoryAtPath:[steamDir stringByDeletingLastPathComponent]
+                      withIntermediateDirectories:YES attributes:nil error:nil];
+                BOOL copied = [fm copyItemAtPath:bundleSteam toPath:steamDir error:&copyError];
+                steamReady = copied &&
+                             [fm fileExistsAtPath:steamExe] &&
+                             [fm fileExistsAtPath:steamClient] &&
+                             [fm fileExistsAtPath:steamMarker];
+                dprintf(STDERR_FILENO,
+                    "[prefix-clone] ml1142 bundle->writable %.3fs copied=%d ready=%d err=%s\n",
+                    CFAbsoluteTimeGetCurrent() - t0, copied ? 1 : 0, steamReady ? 1 : 0,
+                    copyError ? copyError.localizedDescription.UTF8String : "none");
+            }
+
+            /* Compatibility with old dev IPAs whose archive contained Steam. */
+            if (!steamReady && tgz) {
                 CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
                 int src = madeira_extract_prefix_subtree_tgz(
                     tgz.UTF8String, prefix_path,
@@ -382,12 +398,8 @@ void madeira_seed_prefix_if_needed(const char *prefix_path) {
                               [fm fileExistsAtPath:steamClient] &&
                               [fm fileExistsAtPath:steamMarker]);
                 dprintf(STDERR_FILENO,
-                    "[prefix-seed] ml1141 Steam subtree extract %.3fs ready=%d\n",
+                    "[prefix-seed] ml1142 legacy Steam subtree %.3fs ready=%d\n",
                     CFAbsoluteTimeGetCurrent() - t0, steamReady ? 1 : 0);
-                if (steamReady)
-                    LOG("Bundled Steam client ready at %{public}s", steamDir.UTF8String);
-                else
-                    LOG("Bundled Steam client repair FAILED");
             }
         }
 
