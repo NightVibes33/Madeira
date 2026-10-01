@@ -91,7 +91,7 @@ jobs:
     timeout-minutes: 360
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 4G
+      CCACHE_MAXSIZE: 1G
       CCACHE_COMPILERCHECK: content
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
@@ -234,9 +234,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: steamios-ccache-xcode27-v2-${{ github.sha }}
-          restore-keys: |
-            steamios-ccache-xcode27-v2-
+          key: steamios-ccache-xcode27-v3
 
       - name: Restore iOS native dependency cache
         id: native-deps-cache
@@ -244,7 +242,6 @@ jobs:
         with:
           path: |
             toolchains/gnutls-ios
-            build/gnutls-ios/obj
             build/freetype-ios/build
           key: steamios-native-deps-xcode27-v1-${{ steps.cache-keys.outputs.native }}
 
@@ -253,8 +250,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            FEX/build-arm64ec
-            FEX/build-wow64
             app/Madeira/arm64ec-windows/libarm64ecfex.dll
             app/Madeira/arm64ec-windows/xtajit64.dll
             app/Madeira/aarch64-windows/libwow64fex.dll
@@ -274,8 +269,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            wine/build-macos
-            wine/build-arm64ec
             app/Madeira/libwineserver.a
             app/Madeira/libntdll_unix.a
             app/Madeira/libwin32u_unix.a
@@ -297,10 +290,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            build/dxmt-ios/obj
-            build/dxmt-ios/shader-headers
-            build/dxmt-ios/libdxmt_unix.a
-            build/dxmt-ios/libdxmt_combined.a
             app/Madeira/libdxmt_combined.a
           key: steamios-dxmt-ios-xcode27-v1-${{ steps.cache-keys.outputs.dxmt }}
 
@@ -321,17 +310,6 @@ jobs:
           key: steamios-runtime-bootstrap-v1-${{ github.sha }}
           restore-keys: |
             steamios-runtime-xcode27-v5-
-
-      - name: Restore Xcode incremental intermediates
-        uses: actions/cache@v4
-        with:
-          path: |
-            build/steamos-ios-derived/Build/Intermediates.noindex
-            build/steamos-ios-derived/ModuleCache.noindex
-            build/steamos-ios-derived/SDKStatCaches.noindex
-          key: steamios-xcode-derived-v1-${{ hashFiles('app/Madeira.xcodeproj/project.pbxproj', 'app/Madeira/**/*.swift', 'app/Madeira/**/*.m', 'app/Madeira/**/*.mm', 'app/Madeira/**/*.c', 'app/Madeira/**/*.cpp', 'app/Madeira/**/*.h') }}
-          restore-keys: |
-            steamios-xcode-derived-v1-
 
       - name: Configure persistent compiler cache
         shell: bash
