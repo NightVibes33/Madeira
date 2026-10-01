@@ -191,6 +191,8 @@ jobs:
           grep -F 'FEX_IOS_INTERVAL_MUTEX_PATCH_REFUSED' tools/patches/apply-fex-interval-mutex.py
           grep -F 'ml1140: NEVER call NtProtectVirtualMemory while holding' tools/patches/apply-fex-invalidation-lock.py
           grep -F 'iOS-Madeira ml1141: re-entrant-safe interval RW lock' tools/patches/apply-fex-interval-mutex.py
+          grep -F 'iOS-Madeira ml1142: token-scoped recursive interval writer' tools/patches/apply-fex-interval-mutex.py
+          grep -F 'ios_lock_write_nested_aware' tools/patches/apply-fex-interval-mutex.py
           grep -F 'WritePriorityMutex::Mutex IntervalsLock' tools/patches/apply-fex-interval-mutex.py
           grep -F '[iOS-xlock] ml1140' tools/patches/apply-fex-invalidation-lock.py
           grep -F '.steamios-runtime-ready-v2' app/Madeira/WineProcessBridge.m
