@@ -206,10 +206,12 @@ jobs:
           test -s "$dll"
           test -x "$nm"
           echo "STEAMIOS_FEX_STALL_RVA=0x3beba8"
+          echo "STEAMIOS_FEX_STALL_PE_VA=0x1803beba8"
           "$nm" -n -C --defined-only "$dll" > "$RUNNER_TEMP/fex-arm64ec.nm"
           python3 - "$RUNNER_TEMP/fex-arm64ec.nm" <<'PY'
           import re, sys
-          target = 0x3beba8
+          image_base = 0x180000000
+          target = image_base + 0x3beba8
           rows = []
           for line in open(sys.argv[1], errors="replace"):
               m = re.match(r"^([0-9A-Fa-f]+)\\s+([A-Za-z?])\\s+(.*)$", line.rstrip())
