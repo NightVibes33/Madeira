@@ -1,2 +1,2 @@
-trigger=steamios-real-big-picture-bootstrap-20261001-v6
-purpose=build-converged-real-steam-scm-event-madsync-off-clone-first
+trigger=steamios-real-big-picture-bootstrap-20261001-v7
+purpose=arm64ec-loader-image-map-self-deadlock-guard
