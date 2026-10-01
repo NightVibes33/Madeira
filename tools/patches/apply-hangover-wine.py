@@ -185,6 +185,16 @@ def patch_arm64ec_loader_notify(path: Path) -> None:
     if LOADER_IMAGE_NOTIFY_MARKER in s:
         return
 
+    s = replace_once(
+        s,
+        """    static LONG guard;  /* MADEIRA_IMAGE_MAP_GUARD, read once: 0 not yet, 1 off, 2 on */
+    BOOL entered = FALSE;
+""",
+        """    static LONG guard;  /* MADEIRA_IMAGE_MAP_GUARD, read once: 0 not yet, 1 off, 2 on */
+""",
+        "ARM64EC loader dedup unused state",
+    )
+
     old = """    if (guard == 2) entered = enter_syscall_callback();
     pNotifyImageMap( base );
     if (entered) leave_syscall_callback();
