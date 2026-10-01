@@ -24,6 +24,13 @@ grep -q '\[iOS-xlock\] ml1140' "$INVALIDATION_TRACKER" || {
     exit 1
 }
 
+SYNC_CPP="$R/FEX/Source/Windows/Common/WinAPI/Sync.cpp"
+python3 "$R/tools/patches/apply-fex-jit-sync-alias.py" "$SYNC_CPP"
+grep -q 'SteamIOS ml1144' "$SYNC_CPP" || {
+    echo "error: FEX iOS JIT sync-alias fix was not applied" >&2
+    exit 1
+}
+
 B="$R/FEX/build-arm64ec"
 if [ ! -f "$B/CMakeCache.txt" ]; then
     cmake -S "$R/FEX" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
