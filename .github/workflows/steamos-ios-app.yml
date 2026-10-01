@@ -175,27 +175,145 @@ jobs:
           bash tools/runtime-deps/fetch-vcruntime.sh
           echo "STEAMOS_IOS_BOOTSTRAP_OK"
 
-      - name: Restore completed i386 Wine + DXMT farm
-        id: i386-farm-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: app/Madeira/i386-windows
-          key: steamios-i386-farm-xcode27-v2-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'tools/bootstrap/fetch-llvm-mingw.sh', 'build/wine-i386/build.sh') }}
 
-      - name: Restore compiled runtime cache
+      - name: Compute component cache fingerprints
+        id: cache-keys
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          hash_stream() { shasum -a 256 | awk '{print $1}'; }
+          hash_files() { cat "$@" | hash_stream; }
+
+          wine_head="$(git -C wine rev-parse HEAD)"
+          wine_all_diff="$(git -C wine diff --binary -- . | hash_stream)"
+          wine_i386_diff="$(git -C wine diff --binary -- . \
+            ':(exclude)dlls/ntdll/signal_arm64ec.c' \
+            ':(exclude)dlls/ntdll/signal_arm64ec.S' | hash_stream)"
+          fex_head="$(git -C FEX rev-parse HEAD)"
+          dxmt_head="$(git -C research/dxmt rev-parse HEAD)"
+          freetype_head="$(git -C research/freetype rev-parse HEAD)"
+          llvm_head="$(git -C toolchains/llvm-project rev-parse HEAD)"
+
+          native_scripts="$(hash_files build/gnutls-ios/build.sh build/freetype-ios/build.sh tools/runtime-deps/fetch-freetype.sh)"
+          fex_scripts="$(hash_files \
+            build/fex-arm64ec/build.sh build/fex-wow64/build.sh build/steamios-launcher/build.sh \
+            tools/patches/fex-llvm23-cstdlib.patch \
+            tools/patches/apply-fex-interval-mutex.py \
+            tools/patches/apply-fex-invalidation-lock.py \
+            tools/patches/apply-fex-jit-sync-alias.py)"
+          wine_scripts="$(hash_files \
+            build/wineserver/bootstrap-base.sh build/wineserver/build.sh \
+            build/wine-pe/build-ntdll.sh build/ntdll-unix/build.sh build/win32u-unix/build.sh \
+            tools/patches/apply-hangover-wine.py)"
+          i386_scripts="$(hash_files build/wine-i386/build.sh)"
+          llvm_scripts="$(hash_files build/llvm-ios/build.sh)"
+          dxmt_scripts="$(hash_files \
+            build/dxmt-ios/build.sh build/dxmt-ios/apply-xcode27-source-fixes.py \
+            tools/patches/apply-dxmt-ios-xcode27.py)"
+
+          native_key="$(printf '%s\n' "$freetype_head" "$native_scripts" | hash_stream)"
+          fex_key="$(printf '%s\n' "$fex_head" "$fex_scripts" | hash_stream)"
+          wine_key="$(printf '%s\n' "$wine_head" "$wine_all_diff" "$wine_scripts" "$native_key" | hash_stream)"
+          i386_key="$(printf '%s\n' "$wine_head" "$wine_i386_diff" "$dxmt_head" "$i386_scripts" | hash_stream)"
+          llvm_key="$(printf '%s\n' "$llvm_head" "$llvm_scripts" | hash_stream)"
+          dxmt_key="$(printf '%s\n' "$dxmt_head" "$dxmt_scripts" "$llvm_key" | hash_stream)"
+
+          {
+            echo "native=$native_key"
+            echo "fex=$fex_key"
+            echo "wine=$wine_key"
+            echo "i386=$i386_key"
+            echo "llvm=$llvm_key"
+            echo "dxmt=$dxmt_key"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "STEAMIOS_CACHE_KEYS_READY native=${native_key:0:12} fex=${fex_key:0:12} wine=${wine_key:0:12} i386=${i386_key:0:12} llvm=${llvm_key:0:12} dxmt=${dxmt_key:0:12}"
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: steamios-ccache-xcode27-v2-${{ github.sha }}
+          restore-keys: |
+            steamios-ccache-xcode27-v2-
+
+      - name: Restore iOS native dependency cache
+        id: native-deps-cache
         uses: actions/cache@v4
         with:
           path: |
-            .ccache
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            build/freetype-ios/build
+          key: steamios-native-deps-xcode27-v1-${{ steps.cache-keys.outputs.native }}
+
+      - name: Restore FEX translator cache
+        id: fex-cache
+        uses: actions/cache@v4
+        with:
+          path: |
             FEX/build-arm64ec
             FEX/build-wow64
+            app/Madeira/arm64ec-windows/libarm64ecfex.dll
+            app/Madeira/arm64ec-windows/xtajit64.dll
+            app/Madeira/aarch64-windows/libwow64fex.dll
+            app/Madeira/aarch64-windows/xtajit.dll
+            app/Madeira/aarch64-windows/steamios-launcher.exe
+          key: steamios-fex-xcode27-v1-${{ steps.cache-keys.outputs.fex }}
+
+      - name: Restore completed i386 Wine + DXMT farm
+        id: i386-farm-cache
+        uses: actions/cache@v4
+        with:
+          path: app/Madeira/i386-windows
+          key: steamios-i386-farm-xcode27-v3-${{ steps.cache-keys.outputs.i386 }}
+
+      - name: Restore Wine ARM64EC + Unix bridge cache
+        id: wine-runtime-cache
+        uses: actions/cache@v4
+        with:
+          path: |
             wine/build-macos
-            wine/build-i386
-            toolchains/gnutls-ios
-            build/freetype-ios/build
-            toolchains/llvm-host-build
-            toolchains/llvm-ios-build
-          key: steamios-runtime-xcode27-v5-${{ hashFiles('tools/verify-madeira-pins.py', 'tools/patches/apply-hangover-wine.py', 'runtime/runtime-lock.json', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/**/*.sh', 'build/wine-pe/**/*.sh', 'build/ntdll-unix/**/*.sh', 'build/win32u-unix/**/*.sh', 'build/llvm-ios/build.sh', 'build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh') }}
+            wine/build-arm64ec
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+            app/Madeira/arm64ec-windows/ntdll.dll
+          key: steamios-wine-runtime-xcode27-v1-${{ steps.cache-keys.outputs.wine }}
+
+      - name: Restore LLVM iOS runtime cache
+        id: llvm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/llvm-host-build/bin/llvm-tblgen
+            toolchains/llvm-ios-build/include
+            toolchains/llvm-ios-build/lib
+          key: steamios-llvm-ios-xcode27-v1-${{ steps.cache-keys.outputs.llvm }}
+
+      - name: Restore DXMT iOS renderer cache
+        id: dxmt-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/dxmt-ios/obj
+            build/dxmt-ios/shader-headers
+            build/dxmt-ios/libdxmt_unix.a
+            build/dxmt-ios/libdxmt_combined.a
+            app/Madeira/libdxmt_combined.a
+          key: steamios-dxmt-ios-xcode27-v1-${{ steps.cache-keys.outputs.dxmt }}
+
+      - name: Restore Xcode incremental intermediates
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/steamos-ios-derived/Build/Intermediates.noindex
+            build/steamos-ios-derived/ModuleCache.noindex
+            build/steamos-ios-derived/SDKStatCaches.noindex
+          key: steamios-xcode-derived-v1-${{ hashFiles('app/Madeira.xcodeproj/project.pbxproj', 'app/Madeira/**/*.swift', 'app/Madeira/**/*.m', 'app/Madeira/**/*.mm', 'app/Madeira/**/*.c', 'app/Madeira/**/*.cpp', 'app/Madeira/**/*.h') }}
+          restore-keys: |
+            steamios-xcode-derived-v1-
 
       - name: Configure persistent compiler cache
         shell: bash
@@ -211,6 +329,7 @@ jobs:
           echo "STEAMIOS_CCACHE_READY dir=$CCACHE_DIR"
 
       - name: Build iOS native dependencies
+        if: steps.native-deps-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -218,7 +337,16 @@ jobs:
           bash build/freetype-ios/build.sh
           echo "STEAMOS_IOS_NATIVE_DEPS_OK"
 
+      - name: Verify iOS native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s toolchains/gnutls-ios/lib/libgnutls.a
+          test -s build/freetype-ios/build/libfreetype.a
+          echo "STEAMIOS_NATIVE_DEPS_CACHE_OK hit=${{ steps.native-deps-cache.outputs.cache-hit }}"
+
       - name: Build FEX Windows translators
+        if: steps.fex-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -232,11 +360,23 @@ jobs:
           bash build/fex-arm64ec/build.sh
           bash build/fex-wow64/build.sh
           bash build/steamios-launcher/build.sh
-          test -s app/Madeira/aarch64-windows/steamios-launcher.exe
           echo "STEAMOS_IOS_FEX_TRANSLATORS_OK"
-          echo "STEAMOS_IOS_WINDOWLESS_LAUNCHER_BUILT"
+
+      - name: Verify FEX translator cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s app/Madeira/arm64ec-windows/libarm64ecfex.dll
+          test -s app/Madeira/arm64ec-windows/xtajit64.dll
+          test -s app/Madeira/aarch64-windows/libwow64fex.dll
+          test -s app/Madeira/aarch64-windows/xtajit.dll
+          test -s app/Madeira/aarch64-windows/steamios-launcher.exe
+          cmp app/Madeira/arm64ec-windows/libarm64ecfex.dll app/Madeira/arm64ec-windows/xtajit64.dll
+          cmp app/Madeira/aarch64-windows/libwow64fex.dll app/Madeira/aarch64-windows/xtajit.dll
+          echo "STEAMIOS_FEX_CACHE_OK hit=${{ steps.fex-cache.outputs.cache-hit }}"
 
       - name: Configure Wine host headers
+        if: steps.wine-runtime-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -268,26 +408,19 @@ jobs:
             echo "error: cached i386 Wine farm incomplete ($count files; expected >=500)" >&2
             exit 1
           }
-          for f in             kernel32.dll ntdll.dll user32.dll gdi32.dll advapi32.dll             d3d11.dll dxgi.dll d3d10core.dll winemetal.dll             d3d9.dll d3d9-emulated.dll; do
+          for f in \
+            kernel32.dll ntdll.dll user32.dll gdi32.dll advapi32.dll \
+            d3d11.dll dxgi.dll d3d10core.dll winemetal.dll \
+            d3d9.dll d3d9-emulated.dll; do
             test -s "$farm/$f" || {
               echo "error: cached i386 Wine/DXMT output missing $f" >&2
               exit 1
             }
           done
-          if [ "${{ steps.i386-farm-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "STEAMIOS_I386_FARM_CACHE_HIT files=$count"
-          else
-            echo "STEAMIOS_I386_FARM_BUILT_AND_VERIFIED files=$count"
-          fi
-
-      - name: Save completed i386 Wine + DXMT farm
-        if: steps.i386-farm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: app/Madeira/i386-windows
-          key: ${{ steps.i386-farm-cache.outputs.cache-primary-key }}
+          echo "STEAMIOS_I386_FARM_CACHE_OK hit=${{ steps.i386-farm-cache.outputs.cache-hit }} files=$count"
 
       - name: Build wineserver and Wine Unix bridges
+        if: steps.wine-runtime-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -299,22 +432,50 @@ jobs:
           bash build/win32u-unix/build.sh
           echo "STEAMOS_IOS_WINE_UNIX_OK"
 
+      - name: Verify Wine ARM64EC + Unix bridge cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s app/Madeira/libwineserver.a
+          test -s app/Madeira/libntdll_unix.a
+          test -s app/Madeira/libwin32u_unix.a
+          test -s app/Madeira/arm64ec-windows/ntdll.dll
+          echo "STEAMIOS_WINE_RUNTIME_CACHE_OK hit=${{ steps.wine-runtime-cache.outputs.cache-hit }}"
+
       - name: Build LLVM iOS runtime
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/llvm-ios/build.sh
 
-      - name: Build DXMT iOS renderer and stage licenses
+      - name: Verify LLVM iOS runtime cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s toolchains/llvm-ios-build/lib/libLLVMSupport.a
+          test -s toolchains/llvm-ios-build/lib/libLLVMCore.a
+          test -s toolchains/llvm-ios-build/lib/libLLVMPasses.a
+          echo "STEAMIOS_LLVM_CACHE_OK hit=${{ steps.llvm-cache.outputs.cache-hit }}"
+
+      - name: Build DXMT iOS renderer
+        if: steps.dxmt-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
           xcrun --sdk macosx --find metal >/dev/null
           xcrun --sdk macosx --find metallib >/dev/null
           bash build/dxmt-ios/build.sh
-          bash build/stage-licenses.sh
           echo "STEAMOS_IOS_DXMT_IOS_OK"
+
+      - name: Verify DXMT iOS renderer cache and stage licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s app/Madeira/libdxmt_combined.a
+          bash build/stage-licenses.sh
+          echo "STEAMIOS_DXMT_CACHE_OK hit=${{ steps.dxmt-cache.outputs.cache-hit }}"
 
       - name: Report persistent cache stats
         if: always()
@@ -328,6 +489,7 @@ jobs:
         shell: bash
         env:
           STEAMOS_SKIP_NATIVE_REBUILD: "1"
+          STEAMOS_PRESERVE_DERIVED_DATA: "1"
         run: bash build/steamos-ios/build-clean-app.sh
 
       - name: Verify packaged IPA
