@@ -1,0 +1,56 @@
+name: Publish latest green SteamIOS IPA
+
+on:
+  push:
+    branches: [steamios-fex-lock-diagnosis]
+    paths:
+      - ".github/workflows/publish-latest-green.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARTIFACT_ID: "11190826688"
+      SOURCE_RUN: "131"
+      SOURCE_SHA: "83623e574b065d21ae51455621d6a9ec8b981c0e"
+      RELEASE_TAG: "steamios-run-131"
+    steps:
+      - name: Download exact green Actions artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > SteamIOS-run-131.zip
+          unzip -q SteamIOS-run-131.zip -d artifact
+          IPA="$(find artifact -type f -name 'SteamIOS.ipa' -print -quit)"
+          test -n "$IPA"
+          test -s "$IPA"
+          cp "$IPA" SteamIOS.ipa
+
+          SHA_FILE="$(find artifact -type f -name 'SteamIOS.ipa.sha256' -print -quit || true)"
+          if [[ -n "$SHA_FILE" && -s "$SHA_FILE" ]]; then
+            cp "$SHA_FILE" SteamIOS.ipa.sha256
+          else
+            shasum -a 256 SteamIOS.ipa > SteamIOS.ipa.sha256
+          fi
+
+          EXPECTED="$(awk '{print $1}' SteamIOS.ipa.sha256 | tr '[:upper:]' '[:lower:]')"
+          ACTUAL="$(shasum -a 256 SteamIOS.ipa | awk '{print $1}' | tr '[:upper:]' '[:lower:]')"
+          [[ "$EXPECTED" == "$ACTUAL" ]]
+          echo "STEAMIOS_RELEASE_IPA_VERIFIED sha256=$ACTUAL bytes=$(stat -c%s SteamIOS.ipa)"
+
+      - name: Create or update direct-download release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG"               --repo "$GITHUB_REPOSITORY"               --target "$SOURCE_SHA"               --title "SteamIOS run $SOURCE_RUN"               --notes "Direct IPA from successful SteamIOS workflow run $SOURCE_RUN at commit $SOURCE_SHA."
+          fi
+          gh release upload "$RELEASE_TAG"             --repo "$GITHUB_REPOSITORY"             SteamIOS.ipa SteamIOS.ipa.sha256             --clobber
+          echo "STEAMIOS_DIRECT_RELEASE_READY tag=$RELEASE_TAG"
