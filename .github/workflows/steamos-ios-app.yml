@@ -190,7 +190,11 @@ jobs:
 
           wine_head="$(git -C wine rev-parse HEAD)"
           wine_all_diff="$(git -C wine diff --binary -- . | hash_stream)"
+          # ARM64EC-only loader/signal overlays must invalidate the ARM64EC Wine
+          # runtime cache, not the expensive 32-bit Wine/DXMT farm. The loader
+          # changes applied by apply-hangover-wine.py are guarded by __arm64ec__.
           wine_i386_diff="$(git -C wine diff --binary -- . \
+            ':(exclude)dlls/ntdll/loader.c' \
             ':(exclude)dlls/ntdll/signal_arm64ec.c' \
             ':(exclude)dlls/ntdll/signal_arm64ec.S' | hash_stream)"
           fex_head="$(git -C FEX rev-parse HEAD)"
