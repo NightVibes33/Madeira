@@ -178,6 +178,52 @@ static DWORD steamios_wow64_get_environment_variable_w( LPCWSTR name, LPWSTR val
 
 
 
+TLS_INDEX_SYNC_MARKER = "STEAMIOS_TLS_INDEX_POOL_SYNC_V1"
+
+def patch_arm64ec_tls_index_sync(path: Path) -> None:
+    s = path.read_text()
+    if TLS_INDEX_SYNC_MARKER in s:
+        return
+
+    old = """    *(DWORD *)dir->AddressOfIndex = i;
+    tls_dirs[i] = *dir;
+"""
+    new = """    *(DWORD *)dir->AddressOfIndex = i;
+#ifdef __arm64ec__
+    /* STEAMIOS_TLS_INDEX_POOL_SYNC_V1
+     * ARM64EC PE images execute from the SteamIOS JIT-pool copy. Its .data
+     * snapshot is created at image-map time, before alloc_tls_slot() writes
+     * AddressOfIndex. Without mirroring this late loader write, compiler TLS
+     * sequences in the executing pool copy keep the image's initial -1 index
+     * and index TEB->ThreadLocalStoragePointer with 0xffffffff.
+     *
+     * Mirror only the DWORD TLS index, using the same xlate_ios_jit() path
+     * already used below for ARM64EC IAT/data synchronization. */
+    {
+        extern void *xlate_ios_jit( void *ptr );
+        void *slot = (void *)dir->AddressOfIndex;
+        void *pslot = xlate_ios_jit( slot );
+
+        if (pslot && pslot != slot)
+        {
+            static int tls_sync_n;
+            *(volatile DWORD *)pslot = i;
+            if (tls_sync_n < 16)
+            {
+                tls_sync_n++;
+                ERR( "[tls-sync] ml1147 slot=%lu module=%s pe_index=%p pool_index=%p pe=%lu pool=%lu\\n",
+                     i, debugstr_w(mod->BaseDllName.Buffer), slot, pslot,
+                     *(DWORD *)slot, *(volatile DWORD *)pslot );
+            }
+        }
+    }
+#endif
+    tls_dirs[i] = *dir;
+"""
+    s = replace_once(s, old, new, "ARM64EC TLS-index JIT-pool sync")
+    path.write_text(s)
+
+
 LOADER_IMAGE_NOTIFY_MARKER = "STEAMIOS_LOADER_NOTIFY_DEDUP_V1"
 
 def patch_arm64ec_loader_notify(path: Path) -> None:
@@ -335,14 +381,16 @@ def main() -> int:
             raise SystemExit(f"missing Wine source: {p}")
 
     patch_loader(loader)
+    patch_arm64ec_tls_index_sync(loader)
     patch_wow64(wow64)
     patch_windows11(version_c, wine_inf)
     patch_gamepad_bridge(ntuser, xinput)
     patch_arm64ec_loader_notify(signal_arm64ec)
 
     checks = {
-        loader: ["HODLL64", "libarm64ecfex.dll", MARKER,
-                 "arm64ec_process_init_dispatchers", "process_attach( wm->ldr.DdagNode"],
+        loader: ["HODLL64", "libarm64ecfex.dll", MARKER, TLS_INDEX_SYNC_MARKER,
+                 "[tls-sync] ml1147", "arm64ec_process_init_dispatchers",
+                 "process_attach( wm->ldr.DdagNode"],
         wow64: ["HODLL", "libwow64fex.dll", MARKER,
                 "MemoryWineIosJitPoolAddress"],
         version_c: ["VersionData[WIN11]", "10, 0, 26100", MARKER],
