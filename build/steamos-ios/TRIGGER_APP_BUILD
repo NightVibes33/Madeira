@@ -1,2 +1,2 @@
-trigger=steamios-fast-component-cache-20261001-v2
-purpose=validate-warm-split-cache-hit-path
+trigger=steamios-fast-component-cache-20261001-v3
+purpose=arm64ec-tls-index-jit-pool-sync
