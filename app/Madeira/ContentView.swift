@@ -1297,11 +1297,11 @@ struct ContentView: View {
                 .padding(24)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                 .padding(24)
-            } else if let steamStartupError {
+            } else if let startupError = steamStartupError {
                 VStack(spacing: 12) {
                     Text("Steam could not start")
                         .font(.headline)
-                    Text(steamStartupError)
+                    Text(startupError)
                         .font(.caption)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
