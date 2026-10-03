@@ -82,7 +82,7 @@ final class ExternalSteamStorage: NSObject, ObservableObject, UIDocumentPickerDe
         do {
             let url = try URL(
                 resolvingBookmarkData: data,
-                options: [.withSecurityScope],
+                options: [],
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             )
@@ -166,7 +166,7 @@ final class ExternalSteamStorage: NSObject, ObservableObject, UIDocumentPickerDe
 
     private func saveBookmark(for url: URL) throws {
         let data = try url.bookmarkData(
-            options: [.withSecurityScope],
+            options: [],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
@@ -834,6 +834,449 @@ struct HoldKeyView: View {
     let vk: Int32
     var big = false   // landscape D-pad: thumb-sized
     @State private var isDown = false
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: big ? 22 : 14, weight: .semibold, design: .monospaced))
+            .foregroundColor(.white)
+            .frame(minWidth: big ? 56 : 34, minHeight: big ? 56 : 30)
+            .background(Color.white.opacity(isDown ? 0.35 : 0.15))
+            .cornerRadius(big ? 12 : 6)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        if !isDown {
+                            isDown = true
+                            winios_post_key(vk, 1)
+                        }
+                    }
+                    .onEnded { _ in
+                        isDown = false
+                        winios_post_key(vk, 0)
+                    }
+            )
+    }
+}
+
+/// Shared state for the expanded thumbstick pad. The pad cannot be drawn by
+/// SwiftUI in place: the game surface is a raw window-level UIView
+/// (MetalHostView.shared) sitting ABOVE the entire SwiftUI hierarchy, so a
+/// SwiftUI pad centred on the key row gets sliced off wherever it overlaps —
+/// no zIndex can fix that, because zIndex only orders siblings *within*
+/// SwiftUI. So the pad is hosted in the window too, added after (and thus
+/// above) the Metal view, and driven from the SwiftUI button through this.
+final class JoystickPadState: ObservableObject {
+    static let shared = JoystickPadState()
+    @Published var held = false
+    @Published var dir: Int = -1
+    @Published var center: CGPoint = .zero      // window coordinates
+    /// ml641: driven by the pointer panel. The pad is NOT a sibling of the key
+    /// row — it lives in its own UIWindow one level up (that is the whole point
+    /// of this class), so the row's .transition(.opacity) cannot reach it and it
+    /// stayed visible while every other button faded. It has to fade itself.
+    @Published var hidden = false
+}
+
+/// Window-level host for the pad. Transparent and non-interactive: the
+/// SwiftUI button keeps the gesture, this only draws.
+enum JoystickPadHost {
+    /// Own UIWindow, one level above the app's. Being a sibling subview of
+    /// MetalHostView is NOT enough: that view re-adds itself to the window on
+    /// every didMoveToWindow (rotation, re-attach) and DXMT/CoreAnimation can
+    /// reorder around it, so any subview ordering we impose is only true until
+    /// the next layout. A higher windowLevel cannot be undone by anything
+    /// inside the app window, so the pad is unconditionally on top.
+    ///
+    /// Deliberately NOT solved by changing the game surface: the CAMetalLayer
+    /// is window-level precisely because SwiftUI hosting silently dropped
+    /// presents on iOS 26/27 (see MetalHostView) — that is a rendering
+    /// correctness fix and must not be traded away for z-ordering.
+    private static var overlay: PassthroughWindow?
+
+    static func attach(to scene: UIWindowScene) {
+        if overlay == nil {
+            let w = PassthroughWindow(windowScene: scene)
+            w.windowLevel = .normal + 100
+            w.backgroundColor = .clear
+            w.isHidden = false                 // never becomes key: see PassthroughWindow
+            let host = UIHostingController(rootView: JoystickPadOverlay())
+            host.view.backgroundColor = .clear
+            host.view.isUserInteractionEnabled = false
+            w.rootViewController = host
+            overlay = w
+        }
+        overlay?.frame = scene.coordinateSpace.bounds
+    }
+}
+
+/// Transparent, fully click-through window: hitTest always returns nil, so
+/// touches fall through to the app window underneath and the pad can never
+/// steal input from the game surface or the SwiftUI controls.
+final class PassthroughWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+}
+
+/// The expanded pad, drawn in window space at the button's location.
+struct JoystickPadOverlay: View {
+    @ObservedObject private var s = JoystickPadState.shared
+
+    var body: some View {
+        GeometryReader { _ in
+            // THE one and only joystick face — idle ring and expanded pad are
+            // the same view, never two that swap. That identity is what makes
+            // it seamless: the diameter and the knob offset are plain animated
+            // properties, so releasing lets the knob spring back to centre and
+            // keep wiggling after the ring has already shrunk. Two faces
+            // cross-fading (one in the button, one here) cannot do that — the
+            // wiggle dies with the copy that gets faded out.
+            //
+            // Fixed-size box at a CONSTANT offset. Deliberately not
+            // .position() + .transition(.scale): .position expands the view to
+            // fill the parent (so a .center anchor means mid-screen), and an
+            // offset that changes in the same transaction as `held` gets
+            // animated too — which is what made the pad fly in from the top.
+            // Here the only animatable quantities belong to the face itself.
+            JoystickFace(held: s.held, dir: s.dir)
+                .frame(width: JoystickFace.padRadius * 2,
+                       height: JoystickFace.padRadius * 2)
+                .offset(x: s.center.x - JoystickFace.padRadius,
+                        y: s.center.y - JoystickFace.padRadius)
+                .opacity(s.center == .zero ? 0 : 1)
+        }
+        // MUST ignore the safe area. s.center comes from the button's .global
+        // frame, which is measured from the WINDOW origin; without this the
+        // overlay's hosting view is inset by the safe area, the offset above
+        // is measured from below the status bar, and the pad lands ~59pt too
+        // low — roughly one pad radius, which is exactly why it appeared to
+        // sit under the game strip instead of centred on the button.
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .opacity(s.hidden ? 0 : 1)
+        .animation(.easeInOut(duration: 0.28), value: s.hidden)
+        .animation(.spring(response: 0.32, dampingFraction: 0.62), value: s.held)
+        .animation(.spring(response: 0.22, dampingFraction: 0.58), value: s.dir)
+    }
+}
+
+/// The joystick face itself, shared by the in-row idle ring and the expanded
+/// window-level pad so both look identical and animate the same way.
+struct JoystickFace: View {
+    var held: Bool
+    var dir: Int
+    /// ml646: the portrait pad grows out of a key-sized ring when you hold it.
+    /// An overlay stick is a PERMANENT control — it must be full size at rest
+    /// with only the knob moving, so size is decoupled from press here rather
+    /// than faked by passing held:true (which would also kill the knob travel
+    /// and the press styling).
+    var alwaysExpanded = false
+    private var expanded: Bool { held || alwaysExpanded }
+
+    static let idleDiameter: CGFloat = 22
+    static let padRadius: CGFloat = 58
+    private var idleDiameter: CGFloat { Self.idleDiameter }
+    private var padRadius: CGFloat { Self.padRadius }
+    private let knobTravelRatio: CGFloat = 0.30
+
+    @ViewBuilder private var interior: some View {
+        if #available(iOS 26.0, *) {
+            Circle().fill(.clear).glassEffect(.regular, in: Circle())
+        } else {
+            Circle().fill(.ultraThinMaterial)
+        }
+    }
+
+    private func knobOffset(_ d: CGFloat) -> CGSize {
+        guard dir >= 0, expanded else { return .zero }
+        let travel = d * knobTravelRatio
+        let a = Double(dir) * 45.0 * .pi / 180.0
+        return CGSize(width: travel * CGFloat(sin(a)), height: -travel * CGFloat(cos(a)))
+    }
+
+    var body: some View {
+        let d = expanded ? padRadius * 2 : idleDiameter
+        return ZStack {
+            interior
+            Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: expanded ? 2 : 1.5)
+            Circle()
+                .fill(Color.white)
+                .frame(width: d * 0.42, height: d * 0.42)
+                .overlay(
+                    // Roundness cue. It reads at key size but turns into a
+                    // smudge on the big pad, so it fades out as the ring
+                    // springs open rather than scaling up with it.
+                    Circle()
+                        .trim(from: 0.55, to: 0.70)
+                        .stroke(Color.black.opacity(0.38),
+                                style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                        .padding(d * 0.075)
+                        .opacity(expanded ? 0 : 1)
+                )
+                .offset(knobOffset(d))
+        }
+        .frame(width: d, height: d)
+    }
+}
+
+/// On-screen thumbstick. Idle it is a key-sized ring with a white knob;
+/// press and hold and it expands into a pad you can steer. Travel snaps to
+/// eight d-pad directions, each mapped to the arrow keys Windows games
+/// already understand — diagonals simply hold two keys at once — so this
+/// needs no new input path: it posts through the same winios_post_key queue
+/// as the key buttons, and key state is edge-triggered (only the keys that
+/// actually changed are sent on each snap).
+///
+/// The pad expands DOWNWARD. It must never grow up into the game strip:
+/// that surface is a raw window-level UIView (MetalHostView.shared) drawn
+/// over SwiftUI, so anything overlapping it is simply covered.
+struct JoystickKeyView: View {
+    @State private var held = false
+    @State private var dir: Int = -1        // -1 = centred, else 0=up then clockwise
+    @State private var center: CGPoint = .zero
+    @State private var hosted = false       // overlay window up: it draws the face
+
+    private let deadzone: CGFloat = 14      // pt of travel before a direction registers
+
+    private let vkUp: Int32 = 0x26, vkRight: Int32 = 0x27
+    private let vkDown: Int32 = 0x28, vkLeft: Int32 = 0x25
+
+    private func keys(for d: Int) -> [Int32] {
+        switch d {
+        case 0: return [vkUp]
+        case 1: return [vkUp, vkRight]
+        case 2: return [vkRight]
+        case 3: return [vkDown, vkRight]
+        case 4: return [vkDown]
+        case 5: return [vkDown, vkLeft]
+        case 6: return [vkLeft]
+        case 7: return [vkUp, vkLeft]
+        default: return []
+        }
+    }
+
+    /// Release what is no longer held, press what newly is — never a blanket
+    /// release/re-press, which would make a held direction stutter as the
+    /// thumb wanders inside one sector.
+    private func apply(_ next: Int) {
+        guard next != dir else { return }
+        let old = Set(keys(for: dir)), new = Set(keys(for: next))
+        for vk in old.subtracting(new) { winios_post_key(vk, 0) }
+        for vk in new.subtracting(old) { winios_post_key(vk, 1) }
+        dir = next
+        JoystickPadState.shared.dir = next
+    }
+
+    private func snap(_ t: CGSize) -> Int {
+        let d = (t.width * t.width + t.height * t.height).squareRoot()
+        if d < deadzone { return -1 }
+        // Screen y grows downward; measure clockwise from "up".
+        var a = atan2(t.width, -t.height) * 180 / .pi
+        if a < 0 { a += 360 }
+        return Int((a + 22.5) / 45.0) % 8
+    }
+
+    var body: some View {
+        // The idle ring lives in the row (inset inside the 34x30 button so it
+        // has breathing room). The EXPANDED pad is drawn by the window-level
+        // host at this same centre — see JoystickPadState — so it springs out
+        // of the button in place and is never clipped by the game surface.
+        Color.clear
+            .frame(width: 34, height: 30)
+            .background(Color.white.opacity(held ? 0.30 : 0.15))
+            .cornerRadius(6)
+            .overlay { if !hosted { JoystickFace(held: false, dir: -1) } }
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onAppear {
+                        center = CGPoint(x: geo.frame(in: .global).midX,
+                                         y: geo.frame(in: .global).midY)
+                        JoystickPadState.shared.center = center
+                        if let scene = UIApplication.shared.connectedScenes
+                            .compactMap({ $0 as? UIWindowScene }).first {
+                            JoystickPadHost.attach(to: scene)
+                            hosted = true
+                        }
+                    }
+                    .onChange(of: geo.frame(in: .global)) { _, f in
+                        center = CGPoint(x: f.midX, y: f.midY)
+                        JoystickPadState.shared.center = center
+                    }
+                }
+            )
+            .animation(.spring(response: 0.32, dampingFraction: 0.62), value: held)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        if !held {
+                            held = true
+                            if let scene = UIApplication.shared.connectedScenes
+                                .compactMap({ $0 as? UIWindowScene }).first {
+                                JoystickPadHost.attach(to: scene)
+                            }
+                            JoystickPadState.shared.center = center
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.62)) {
+                                JoystickPadState.shared.held = true
+                            }
+                        }
+                        apply(snap(g.translation))
+                    }
+                    .onEnded { _ in
+                        apply(-1)                        // releases every held arrow
+                        held = false
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.62)) {
+                            JoystickPadState.shared.held = false
+                        }
+                    }
+            )
+    }
+}
+
+// SwiftUI wrapper around the placeholder view.
+// iOS software-keyboard → Wine key events. Each character is mapped to a
+// US-layout virtual-key (+ shift where needed) and posted as a down/up pair;
+// the message queue's ToUnicode then produces the right WM_CHAR. Paths need
+// the full symbol set (":" "\" "-" "." "_"), so the table is comprehensive.
+extension MetalBackedView: UIKeyInput {
+    var hasText: Bool { false }
+
+    // US-keyboard VK + shift for a character. Returns nil for chars we can't map.
+    private static func vkForChar(_ ch: Character) -> (Int32, Bool)? {
+        if ch == "\n" || ch == "\r" { return (0x0D, false) }   // VK_RETURN
+        if ch == "\t" { return (0x09, false) }                 // VK_TAB
+        if ch == " " { return (0x20, false) }                  // VK_SPACE
+        if ch.isLetter, let up = ch.uppercased().first?.asciiValue, up >= 0x41, up <= 0x5A {
+            return (Int32(up), ch.isUppercase)                 // VK_A..VK_Z
+        }
+        if let a = ch.asciiValue, a >= 0x30, a <= 0x39 {
+            return (Int32(a), false)                           // VK_0..VK_9 (unshifted)
+        }
+        let table: [Character: (Int32, Bool)] = [
+            "!": (0x31, true), "@": (0x32, true), "#": (0x33, true), "$": (0x34, true),
+            "%": (0x35, true), "^": (0x36, true), "&": (0x37, true), "*": (0x38, true),
+            "(": (0x39, true), ")": (0x30, true),
+            "-": (0xBD, false), "_": (0xBD, true),
+            "=": (0xBB, false), "+": (0xBB, true),
+            "[": (0xDB, false), "{": (0xDB, true),
+            "]": (0xDD, false), "}": (0xDD, true),
+            "\\": (0xDC, false), "|": (0xDC, true),
+            ";": (0xBA, false), ":": (0xBA, true),
+            "'": (0xDE, false), "\"": (0xDE, true),
+            ",": (0xBC, false), "<": (0xBC, true),
+            ".": (0xBE, false), ">": (0xBE, true),
+            "/": (0xBF, false), "?": (0xBF, true),
+            "`": (0xC0, false), "~": (0xC0, true),
+        ]
+        return table[ch]
+    }
+
+    func insertText(_ text: String) {
+        for ch in text {
+            guard let (vk, shift) = MetalBackedView.vkForChar(ch) else { continue }
+            if shift { winios_post_key(0x10, 1) }   // VK_SHIFT down
+            winios_post_key(vk, 1)
+            winios_post_key(vk, 0)
+            if shift { winios_post_key(0x10, 0) }    // VK_SHIFT up
+        }
+    }
+
+    func deleteBackward() {
+        winios_post_key(0x08, 1)   // VK_BACK down
+        winios_post_key(0x08, 0)
+    }
+
+    // Traits: keep iOS from rewriting path characters.
+    var keyboardType: UIKeyboardType { get { .asciiCapable } set {} }
+    var autocorrectionType: UITextAutocorrectionType { get { .no } set {} }
+    var autocapitalizationType: UITextAutocapitalizationType { get { .none } set {} }
+    var smartQuotesType: UITextSmartQuotesType { get { .no } set {} }
+    var smartDashesType: UITextSmartDashesType { get { .no } set {} }
+    var spellCheckingType: UITextSpellCheckingType { get { .no } set {} }
+}
+
+/// Pointer settings, persisted to the app container.
+///
+/// ml641. Two independent sensitivities, because the two modes mean different
+/// things and a single slider would fight itself:
+///   • absolute  — trackpad gain, desktop px per view pt. This IS the old
+///     hardcoded `sens = 2.0`, so the default reproduces today's desktop feel
+///     exactly.
+///   • relative  — mouse counts per view pt for mouse-look. What the right value
+///     is depends on the GAME's own sensitivity and FOV, which we cannot see, so
+///     it has to be calibrated by hand once. See the comment in touchesMoved.
+///
+/// Stored as JSON in Documents/ rather than UserDefaults: that is the container
+/// we already know survives reinstall (verified), and it can be pulled and
+/// edited with the same devicectl command we use for the log.
+final class InputSettings: ObservableObject {
+    static let shared = InputSettings()
+
+    @Published var relative: Bool  = false { didSet { save() } }
+    @Published var sensAbs:  Double = 2.0  { didSet { save() } }
+    @Published var sensRel:  Double = 2.0  { didSet { save() } }
+    /// ml649: heavy diagnostics. Default OFF so the shipped default is the fast
+    /// path; flip it on only when a run needs to be explainable.
+    @Published var diagnostics = false { didSet { madeira_set_diag_enabled(diagnostics ? 1 : 0); save() } }
+
+    /// didSet fires for assignments made in init() because the properties are
+    /// already initialised by then; without this the first launch would write
+    /// the defaults back over a file it had only half-read.
+    private var loading = false
+
+    private static var url: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("madeira-input.json")
+    }
+
+    private init() {
+        loading = true
+        if let d = try? Data(contentsOf: Self.url),
+           let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+            relative = j["relative"] as? Bool   ?? false
+            sensAbs  = j["sensAbs"]  as? Double ?? 2.0
+            sensRel  = j["sensRel"]  as? Double ?? 2.0
+            diagnostics = j["diagnostics"] as? Bool ?? false
+        }
+        loading = false
+        madeira_set_diag_enabled(diagnostics ? 1 : 0)   // push the restored value down
+    }
+
+    private func save() {
+        guard !loading else { return }
+        let j: [String: Any] = ["relative": relative, "sensAbs": sensAbs, "sensRel": sensRel, "diagnostics": diagnostics]
+        guard let d = try? JSONSerialization.data(withJSONObject: j) else { return }
+        try? d.write(to: Self.url, options: .atomic)
+    }
+}
+
+struct MadeiraMetalView: UIViewRepresentable {
+    func makeUIView(context: Context) -> MetalBackedView {
+        return MetalBackedView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+    }
+    func updateUIView(_ uiView: MetalBackedView, context: Context) {}
+}
+
+struct ContentView: View {
+    // SteamIOS product shell: users see Steam startup / Big Picture directly.
+    @State private var steamProductStarted = false
+    @State private var steamInstalling = false
+    @State private var steamStartupError: String?
+
+    @StateObject private var logStore = LogStore.shared
+    @State private var jitStatus: JITStatus = .unknown
+    @State private var entitlements: EntitlementStatus?
+    @State private var debuggerAttached = isDebuggerAttached()
+    @ObservedObject private var input = InputSettings.shared
+    @State private var pointerPanel = false
+    @Namespace private var pointerNS
+    /// .compact = iPhone landscape: game surface expands, arrow keys appear.
+    @Environment(\.verticalSizeClass) private var vSizeClass
+
+    enum JITStatus {
+        case unknown
+        case testing
+        case available
+        case mappingOnly
+        case unavailable
+    }
 
     var body: some View {
         ZStack {
