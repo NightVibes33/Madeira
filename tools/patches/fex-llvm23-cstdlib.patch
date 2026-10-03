@@ -1,0 +1,10 @@
+--- a/FEXCore/Source/Common/StringConv.h
++++ b/FEXCore/Source/Common/StringConv.h
+@@ -2,6 +2,7 @@
+ #pragma once
+ #include <FEXCore/fextl/string.h>
+ 
++#include <cstdlib>
+ #include <concepts>
+ #include <string_view>
+ 
