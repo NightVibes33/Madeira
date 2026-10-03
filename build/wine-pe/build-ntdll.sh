@@ -7,7 +7,7 @@
 # strip/pad for those). Requires the llvm-mingw toolchain (docs/BUILDING.md).
 set -eu
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
+TC="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin"
 export PATH="$TC:$PATH"
 B="$R/wine/build-arm64ec"
 if [ ! -f "$B/config.status" ]; then
