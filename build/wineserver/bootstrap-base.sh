@@ -37,11 +37,11 @@ FLAGS=(
   -Wno-implicit-function-declaration
 )
 
-for name in "\${SOURCES[@]}"; do
+for name in "${SOURCES[@]}"; do
   src="$WINE_SRC/server/$name.c"
   [[ -f "$src" ]] || { echo "ERROR: missing Wine server source $src" >&2; exit 1; }
   echo "  base wineserver: $name.c"
-  xcrun -sdk iphoneos clang "\${FLAGS[@]}" -c "$src" -o "$OBJ_DIR/$name.o"
+  xcrun -sdk iphoneos clang "${FLAGS[@]}" -c "$src" -o "$OBJ_DIR/$name.o"
 done
 
 xcrun -sdk iphoneos ar rcs "$OUT" "$OBJ_DIR"/*.o
