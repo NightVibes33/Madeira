@@ -124,6 +124,8 @@ jobs:
           bash build/freetype-ios/build.sh
           bash build/fex-ios/build.sh
           bash build/fex-arm64ec/build.sh
+          bash build/steamios-launcher/build.sh
+          test -s app/Madeira/aarch64-windows/steamios-launcher.exe
           bash build/wine-pe/build-ntdll.sh
           bash build/wineserver/build.sh all
           bash build/ntdll-unix/build.sh
