@@ -4,6 +4,13 @@
 set -eu
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PATH="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:$PATH"
+
+PATCH="$R/tools/patches/fex-llvm23-cstdlib.patch"
+STRING_CONV="$R/FEX/FEXCore/Source/Common/StringConv.h"
+if ! grep -q '^#include <cstdlib>' "$STRING_CONV"; then
+    git -C "$R/FEX" apply "$PATCH"
+fi
+
 B="$R/FEX/build-arm64ec"
 if [ ! -f "$B/CMakeCache.txt" ]; then
     cmake -S "$R/FEX" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
