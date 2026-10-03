@@ -28,7 +28,7 @@
 set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TC="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin"
+TC="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin"
 export PATH="$TC:$PATH"
 B="$R/wine/build-i386"
 DEST="$R/app/Madeira/i386-windows"
