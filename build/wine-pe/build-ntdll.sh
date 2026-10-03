@@ -13,7 +13,12 @@ B="$R/wine/build-arm64ec"
 if [ ! -f "$B/config.status" ]; then
     mkdir -p "$B" && cd "$B" && ../configure --enable-archs=arm64ec --without-x --disable-tests
 fi
-cd "$B" && make -C dlls/ntdll
+cd "$B"
+# dwrite's unix side is compiled later into the iOS Mach-O and includes
+# dwrite_private.h, which depends on widl-generated SDK headers. Building
+# ntdll alone does not guarantee those headers exist on a clean runner.
+make include/dwrite_3.h include/d2d1.h
+make -C dlls/ntdll
 SRC="$B/dlls/ntdll/arm64ec-windows/ntdll.dll"; OUT="$R/app/Madeira/arm64ec-windows/ntdll.dll"
 cp "$SRC" "$OUT.tmp"
 "$TC/arm64ec-w64-mingw32-strip" "$OUT.tmp"
