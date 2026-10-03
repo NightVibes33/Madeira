@@ -7,12 +7,20 @@
 set -eu
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PATH="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:$PATH"
+
+PATCH="$R/tools/patches/fex-llvm23-cstdlib.patch"
+STRING_CONV="$R/FEX/FEXCore/Source/Common/StringConv.h"
+if ! grep -q '^#include <cstdlib>' "$STRING_CONV"; then
+    git -C "$R/FEX" apply "$PATCH"
+fi
+
 B="$R/FEX/build-wow64"
 if [ ! -f "$B/CMakeCache.txt" ]; then
     cmake -S "$R/FEX" -B "$B" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_TOOLCHAIN_FILE="$R/FEX/Data/CMake/toolchain_mingw.cmake" \
         -DMINGW_TRIPLE=aarch64-w64-mingw32 \
-        -DFEX_IOS_HOST_BUILD=ON -DCMAKE_C_FLAGS=-DFEX_IOS_HOST \
+        -DFEX_IOS_HOST_BUILD=ON -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON \
+        -DCMAKE_C_FLAGS=-DFEX_IOS_HOST \
         -DCMAKE_CXX_FLAGS=-DFEX_IOS_HOST -DCMAKE_ASM_FLAGS=-DFEX_IOS_HOST \
         -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF \
         -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF -DTUNE_ARCH=generic -DTUNE_CPU=none \
