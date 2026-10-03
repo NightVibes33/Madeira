@@ -81,7 +81,7 @@ final class ExternalGameStorageManager: NSObject, ObservableObject, UIDocumentPi
     private let bookmarkKey = "SteamIOS.ExternalGameStorage.Bookmark.v1"
     private let enabledKey = "SteamIOS.ExternalGameStorage.Enabled.v1"
     private var selectedURL: URL?
-    private var ownsSecurityScope = false
+    private var leasedSecurityScopedURLs: [URL] = []
 
     private override init() {
         super.init()
@@ -89,8 +89,8 @@ final class ExternalGameStorageManager: NSObject, ObservableObject, UIDocumentPi
     }
 
     deinit {
-        if ownsSecurityScope {
-            selectedURL?.stopAccessingSecurityScopedResource()
+        for url in leasedSecurityScopedURLs {
+            url.stopAccessingSecurityScopedResource()
         }
     }
 
@@ -118,18 +118,16 @@ final class ExternalGameStorageManager: NSObject, ObservableObject, UIDocumentPi
             externalEnabled = false
             displayName = "External Drive Unavailable"
             selectedURL = nil
-            ownsSecurityScope = false
         }
     }
 
     private func activate(_ url: URL) {
-        if ownsSecurityScope {
-            selectedURL?.stopAccessingSecurityScopedResource()
-        }
         selectedURL = url
-        ownsSecurityScope = url.startAccessingSecurityScopedResource()
+        if url.startAccessingSecurityScopedResource() {
+            leasedSecurityScopedURLs.append(url)
+        }
 
-        // A security-scoped provider can transiently return false while the
+        // A security-scoped provider can transiently be unavailable while the
         // volume is reconnecting. Keep the bookmark, but do not route Steam to
         // a path that cannot currently be reached.
         externalEnabled = FileManager.default.fileExists(atPath: url.path)
@@ -148,11 +146,9 @@ final class ExternalGameStorageManager: NSObject, ObservableObject, UIDocumentPi
 
     func useInternalStorage() {
         defaults.set(false, forKey: enabledKey)
-        if ownsSecurityScope {
-            selectedURL?.stopAccessingSecurityScopedResource()
-        }
-        selectedURL = nil
-        ownsSecurityScope = false
+        // Do not revoke an already-open security scope mid-game. The current
+        // Steam process may still have files open on the USB drive; all scopes
+        // are released when SteamIOS exits.
         externalEnabled = false
         displayName = "Internal Storage"
         LogStore.shared.log("Steam game storage set to internal; applies before the next Steam launch.", level: .success)
@@ -333,6 +329,15 @@ final class ExternalGameStorageManager: NSObject, ObservableObject, UIDocumentPi
                 }
             } else if !fm.fileExists(atPath: dest.path) {
                 try fm.moveItem(at: item, to: dest)
+            } else if fm.contentsEqual(atPath: item.path, andPath: dest.path) {
+                try fm.removeItem(at: item)
+            } else {
+                throw NSError(
+                    domain: "SteamIOS.ExternalStorage",
+                    code: 409,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Internal Steam library contains a conflicting item named \(item.lastPathComponent). No files were deleted."]
+                )
             }
         }
     }
@@ -2823,10 +2828,10 @@ final class TouchControlsModel: ObservableObject {
     /// touch in the window. Nothing responded, and edit mode — whose branch
     /// captured everything — could never be entered to mask it.
     func hitsInteractive(_ p: CGPoint, in bounds: CGRect) -> Bool {
-        // Top bar: two 44pt buttons 10pt apart in play mode, centred, 10pt down.
+        // Top bar: controller, storage and edit buttons; edit mode also adds +.
         // Padded generously; a few points of slop costs nothing and a missed tap
         // costs a build.
-        let buttonCount: CGFloat = m.editing ? 4 : 3
+        let buttonCount: CGFloat = editing ? 4 : 3
         let barW: CGFloat = buttonCount * 44 + (buttonCount - 1) * 10
         if CGRect(x: bounds.midX - barW / 2 - 10, y: 0,
                   width: barW + 20, height: 68).contains(p) { return true }
