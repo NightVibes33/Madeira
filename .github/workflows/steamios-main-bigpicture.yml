@@ -93,6 +93,17 @@ jobs:
             toolchains/llvm-ios-build
           key: steamios-main-runtime-v2-${{ hashFiles('build/fex-ios/build.sh', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/build.sh', 'build/wine-pe/build-ntdll.sh', 'build/ntdll-unix/build.sh', 'build/win32u-unix/build.sh', 'build/dxmt-ios/build.sh', 'build/llvm-ios/build.sh', 'build/steamios-launcher/build.sh') }}
 
+      - name: Restore durable native/FEX cache
+        id: durable-fex-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            build/freetype-ios/build
+            FEX/build-ios
+          key: steamios-main-native-fex-v1-${{ hashFiles('build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh', 'build/fex-ios/build.sh', 'tools/patches/apply-fex-ios-native-host.py') }}
+
       - name: Configure compiler cache
         shell: bash
         run: |
@@ -118,19 +129,37 @@ jobs:
           fi
           echo "STEAMIOS_WINE_HOST_READY"
 
-      - name: Build upstream Madeira runtime
+      - name: Build cacheable native iOS core
         shell: bash
         run: |
           set -euo pipefail
           export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/gnutls-ios/build.sh
           bash build/freetype-ios/build.sh
+          bash build/fex-ios/build.sh
+          echo "STEAMIOS_MAIN_NATIVE_FEX_BUILT"
+
+      - name: Save durable native/FEX cache
+        if: steps.durable-fex-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            build/freetype-ios/build
+            FEX/build-ios
+          key: ${{ steps.durable-fex-cache.outputs.cache-primary-key }}
+
+      - name: Build upstream Madeira runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           PY_VENV="$PWD/build/steamios-python"
           rm -rf "$PY_VENV"
           python3 -m venv "$PY_VENV"
           "$PY_VENV/bin/python" -m pip install --disable-pip-version-check --quiet 'packaging==24.2'
           export PATH="$PY_VENV/bin:$PATH"
-          bash build/fex-ios/build.sh
           bash build/fex-arm64ec/build.sh
           bash build/fex-wow64/build.sh
           bash build/steamios-launcher/build.sh
