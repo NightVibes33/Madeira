@@ -28,6 +28,322 @@ private enum SteamIOSOrientation {
     }
 }
 
+
+final class ExternalSteamStorage: NSObject, ObservableObject, UIDocumentPickerDelegate {
+    static let shared = ExternalSteamStorage()
+
+    @Published private(set) var isConfigured = false
+    @Published private(set) var displayName = "External Storage"
+
+    private let bookmarkKey = "SteamIOS.ExternalStorageBookmark.v1"
+    private let contentIDKey = "SteamIOS.ExternalStorageContentID.v1"
+    private var scopedURL: URL?
+
+    override private init() {
+        super.init()
+        restoreAndMountIfAvailable()
+    }
+
+    deinit {
+        scopedURL?.stopAccessingSecurityScopedResource()
+    }
+
+    func presentPicker() {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.folder],
+            asCopy: false
+        )
+        picker.allowsMultipleSelection = false
+        picker.delegate = self
+
+        guard let presenter = Self.topViewController() else {
+            LogStore.shared.log("External storage: no active presenter.", level: .error)
+            return
+        }
+        presenter.present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController,
+                        didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        activate(url)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
+
+    func restoreAndMountIfAvailable() {
+        if scopedURL != nil {
+            refreshMount()
+            return
+        }
+        guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
+
+        var stale = false
+        do {
+            let url = try URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            )
+            guard url.startAccessingSecurityScopedResource() else {
+                LogStore.shared.log(
+                    "External storage bookmark resolved, but access is unavailable. Reconnect the drive and choose it again if needed.",
+                    level: .error
+                )
+                return
+            }
+            scopedURL = url
+            if stale { try saveBookmark(for: url) }
+            try configureMount(at: url)
+            DispatchQueue.main.async {
+                self.isConfigured = true
+                self.displayName = url.lastPathComponent
+            }
+            LogStore.shared.log("External Steam library mounted: \(url.path)", level: .success)
+        } catch {
+            LogStore.shared.log("External storage restore failed: \(error.localizedDescription)", level: .error)
+        }
+    }
+
+    func refreshMount() {
+        guard let url = scopedURL else {
+            restoreAndMountIfAvailable()
+            return
+        }
+        do {
+            try configureMount(at: url)
+            DispatchQueue.main.async {
+                self.isConfigured = true
+                self.displayName = url.lastPathComponent
+            }
+        } catch {
+            DispatchQueue.main.async { self.isConfigured = false }
+            LogStore.shared.log("External storage mount failed: \(error.localizedDescription)", level: .error)
+        }
+    }
+
+    private func activate(_ url: URL) {
+        let old = scopedURL
+        if old != url { old?.stopAccessingSecurityScopedResource() }
+
+        guard url.startAccessingSecurityScopedResource() else {
+            LogStore.shared.log("External storage access was denied.", level: .error)
+            return
+        }
+
+        do {
+            try saveBookmark(for: url)
+            scopedURL = url
+            try configureMount(at: url)
+            DispatchQueue.main.async {
+                self.isConfigured = true
+                self.displayName = url.lastPathComponent
+            }
+            LogStore.shared.log("External Steam library ready: \(url.path)", level: .success)
+        } catch {
+            if scopedURL == url {
+                scopedURL = nil
+                url.stopAccessingSecurityScopedResource()
+            }
+            DispatchQueue.main.async { self.isConfigured = false }
+            LogStore.shared.log("External storage setup failed: \(error.localizedDescription)", level: .error)
+        }
+    }
+
+    private func saveBookmark(for url: URL) throws {
+        let data = try url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        UserDefaults.standard.set(data, forKey: bookmarkKey)
+    }
+
+    private func configureMount(at selectedRoot: URL) throws {
+        let fm = FileManager.default
+        let externalRoot = selectedRoot.appendingPathComponent("SteamIOS", isDirectory: true)
+        let library = externalRoot.appendingPathComponent("SteamLibrary", isDirectory: true)
+
+        var coordinationError: NSError?
+        var setupError: Error?
+        NSFileCoordinator().coordinate(
+            writingItemAt: selectedRoot,
+            options: .forMerging,
+            error: &coordinationError
+        ) { coordinatedRoot in
+            do {
+                let coordinatedExternalRoot = coordinatedRoot
+                    .appendingPathComponent("SteamIOS", isDirectory: true)
+                let coordinatedLibrary = coordinatedExternalRoot
+                    .appendingPathComponent("SteamLibrary", isDirectory: true)
+
+                try fm.createDirectory(
+                    at: coordinatedLibrary.appendingPathComponent("steamapps/common", isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+                try fm.createDirectory(
+                    at: coordinatedLibrary.appendingPathComponent("steamapps/downloading", isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+                try fm.createDirectory(
+                    at: coordinatedLibrary.appendingPathComponent("steamapps/workshop", isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+                try fm.createDirectory(
+                    at: coordinatedLibrary.appendingPathComponent("steamapps/shadercache", isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+
+                let probe = coordinatedExternalRoot.appendingPathComponent(".steamios-write-test")
+                try Data("SteamIOS".utf8).write(to: probe, options: .atomic)
+                try fm.removeItem(at: probe)
+            } catch {
+                setupError = error
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        if let setupError { throw setupError }
+
+        let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let prefix = documents.appendingPathComponent("wine", isDirectory: true)
+        let dosDevices = prefix.appendingPathComponent("dosdevices", isDirectory: true)
+        let driveC = prefix.appendingPathComponent("drive_c", isDirectory: true)
+        try fm.createDirectory(at: dosDevices, withIntermediateDirectories: true)
+        try fm.createDirectory(at: driveC, withIntermediateDirectories: true)
+
+        // Stable Wine path for Steam. E: points at <chosen folder>/SteamIOS,
+        // and the library itself is always E:\SteamLibrary.
+        try replaceSymlink(
+            at: dosDevices.appendingPathComponent("e:"),
+            destination: externalRoot.path
+        )
+        try replaceSymlink(
+            at: driveC.appendingPathComponent("SteamIOSExternal"),
+            destination: library.path
+        )
+
+        try registerLibraryWithSteam(prefix: prefix)
+    }
+
+    private func replaceSymlink(at link: URL, destination: String) throws {
+        let fm = FileManager.default
+        if let current = try? fm.destinationOfSymbolicLink(atPath: link.path),
+           current == destination {
+            return
+        }
+        try? fm.removeItem(at: link)
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: destination)
+    }
+
+    private func registerLibraryWithSteam(prefix: URL) throws {
+        let fm = FileManager.default
+        let candidates: [(URL, String)] = [
+            (prefix.appendingPathComponent("drive_c/Program Files (x86)/Steam", isDirectory: true),
+             #"C:\\Program Files (x86)\\Steam"#),
+            (prefix.appendingPathComponent("drive_c/Program Files/Steam", isDirectory: true),
+             #"C:\\Program Files\\Steam"#),
+            (prefix.appendingPathComponent("drive_c/Steam", isDirectory: true),
+             #"C:\\Steam"#),
+        ]
+
+        guard let found = candidates.first(where: {
+            fm.fileExists(atPath: $0.0.appendingPathComponent("steam.exe").path)
+        }) else {
+            // Steam may not be installed yet. The mount already exists; this
+            // method is called again after first-run runtime extraction.
+            return
+        }
+
+        let steamApps = found.0.appendingPathComponent("steamapps", isDirectory: true)
+        try fm.createDirectory(at: steamApps, withIntermediateDirectories: true)
+        let vdf = steamApps.appendingPathComponent("libraryfolders.vdf")
+        let externalPath = #"E:\\SteamLibrary"#
+
+        var text: String
+        if let existing = try? String(contentsOf: vdf, encoding: .utf8),
+           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = existing
+        } else {
+            text = """
+            "libraryfolders"
+            {
+                "0"
+                {
+                    "path" "\(found.1)"
+                    "label" ""
+                    "contentid" "1"
+                    "totalsize" "0"
+                    "update_clean_bytes_tally" "0"
+                    "time_last_update_corruption" "0"
+                    "apps"
+                    {
+                    }
+                }
+            }
+            """
+        }
+
+        guard !text.contains(#""path" "E:\\SteamLibrary""#) else { return }
+
+        let defaults = UserDefaults.standard
+        let contentID: String
+        if let saved = defaults.string(forKey: contentIDKey) {
+            contentID = saved
+        } else {
+            contentID = String(UInt64.random(in: 1_000_000_000_000_000_000...8_999_999_999_999_999_999))
+            defaults.set(contentID, forKey: contentIDKey)
+        }
+
+        let block = """
+
+                "9000"
+                {
+                    "path" "\(externalPath)"
+                    "label" "SteamIOS External"
+                    "contentid" "\(contentID)"
+                    "totalsize" "0"
+                    "update_clean_bytes_tally" "0"
+                    "time_last_update_corruption" "0"
+                    "apps"
+                    {
+                    }
+                }
+        """
+
+        if let closing = text.lastIndex(of: "}") {
+            text.insert(contentsOf: block, at: closing)
+        } else {
+            throw NSError(
+                domain: "SteamIOS.ExternalStorage",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Steam libraryfolders.vdf is malformed."]
+            )
+        }
+
+        try text.write(to: vdf, atomically: true, encoding: .utf8)
+        LogStore.shared.log("Steam external library registered at E:\\SteamLibrary", level: .success)
+    }
+
+    private static func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        var controller = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? scene?.windows.first?.rootViewController
+
+        while let presented = controller?.presentedViewController {
+            controller = presented
+        }
+        if let nav = controller as? UINavigationController {
+            return nav.visibleViewController ?? nav
+        }
+        if let tab = controller as? UITabBarController {
+            return tab.selectedViewController ?? tab
+        }
+        return controller
+    }
+}
+
 private enum SteamIOSDisplayProfile {
     static func preferredDesktopSize() -> (width: Int, height: Int) {
         let native = UIScreen.main.nativeBounds.size
@@ -889,6 +1205,7 @@ struct HoldKeyView: View {
     }
 
     private func ensureSteamRuntimeThenLaunch() {
+        ExternalSteamStorage.shared.restoreAndMountIfAvailable()
         if prepareSteamLaunch() {
             launchSteamBigPicture()
             return
@@ -936,6 +1253,7 @@ struct HoldKeyView: View {
 
                 DispatchQueue.main.async {
                     self.steamInstalling = false
+                    ExternalSteamStorage.shared.refreshMount()
                     guard rc == 0, self.prepareSteamLaunch() else {
                         self.steamProductStarted = false
                         self.steamStartupError = "Steam downloaded, but its runtime could not be installed into the Wine prefix."
@@ -2944,6 +3262,10 @@ struct TouchControlsOverlay: View {
             glassButton(m.editing ? "checkmark" : "pencil") {
                 m.editing.toggle()
                 if !m.editing { m.selected = nil }
+            }
+            glassButton(externalStorage.isConfigured ? "externaldrive.fill" : "externaldrive",
+                        dim: !externalStorage.isConfigured) {
+                externalStorage.presentPicker()
             }
             if m.editing {
                 glassButton("plus") {
