@@ -124,8 +124,21 @@ final class ExternalSteamStorage: NSObject, ObservableObject, UIDocumentPickerDe
     }
 
     private func activate(_ url: URL) {
-        let old = scopedURL
-        if old != url { old?.stopAccessingSecurityScopedResource() }
+        if scopedURL == url {
+            do {
+                try configureMount(at: url)
+                DispatchQueue.main.async {
+                    self.isConfigured = true
+                    self.displayName = url.lastPathComponent
+                }
+            } catch {
+                DispatchQueue.main.async { self.isConfigured = false }
+                LogStore.shared.log("External storage setup failed: \(error.localizedDescription)", level: .error)
+            }
+            return
+        }
+
+        scopedURL?.stopAccessingSecurityScopedResource()
 
         guard url.startAccessingSecurityScopedResource() else {
             LogStore.shared.log("External storage access was denied.", level: .error)
@@ -375,314 +388,6 @@ private enum SteamIOSDisplayProfile {
         )
     }
 }
-
-/// USB / OTG game storage.
-///
-/// iOS grants access to removable media through a user-selected Files folder.
-/// Keep that security-scoped URL alive for the process lifetime, then make
-/// Steam's canonical \`steamapps\` directory a symlink to either:
-///
-///   internal: Documents/SteamInternalLibrary/steamapps
-///   external: <picked folder>/SteamIOSLibrary/steamapps
-///
-/// Steam therefore sees one normal library while the game payload, compatdata
-/// and shader cache can physically live on the external drive.
-final class ExternalGameStorageManager: NSObject, ObservableObject, UIDocumentPickerDelegate {
-    static let shared = ExternalGameStorageManager()
-
-    @Published private(set) var externalEnabled = false
-    @Published private(set) var displayName = "Internal Storage"
-
-    private let defaults = UserDefaults.standard
-    private let bookmarkKey = "SteamIOS.ExternalGameStorage.Bookmark.v1"
-    private let enabledKey = "SteamIOS.ExternalGameStorage.Enabled.v1"
-    private var selectedURL: URL?
-    private var leasedSecurityScopedURLs: [URL] = []
-
-    private override init() {
-        super.init()
-        restoreSelection()
-    }
-
-    deinit {
-        for url in leasedSecurityScopedURLs {
-            url.stopAccessingSecurityScopedResource()
-        }
-    }
-
-    private func restoreSelection() {
-        guard defaults.bool(forKey: enabledKey),
-              let data = defaults.data(forKey: bookmarkKey) else {
-            externalEnabled = false
-            displayName = "Internal Storage"
-            return
-        }
-
-        var stale = false
-        do {
-            let url = try URL(
-                resolvingBookmarkData: data,
-                options: [.withoutUI],
-                relativeTo: nil,
-                bookmarkDataIsStale: &stale
-            )
-            activate(url)
-            if stale {
-                try persistBookmark(for: url)
-            }
-        } catch {
-            externalEnabled = false
-            displayName = "External Drive Unavailable"
-            selectedURL = nil
-        }
-    }
-
-    private func activate(_ url: URL) {
-        selectedURL = url
-        if url.startAccessingSecurityScopedResource() {
-            leasedSecurityScopedURLs.append(url)
-        }
-
-        // A security-scoped provider can transiently be unavailable while the
-        // volume is reconnecting. Keep the bookmark, but do not route Steam to
-        // a path that cannot currently be reached.
-        externalEnabled = FileManager.default.fileExists(atPath: url.path)
-        displayName = externalEnabled ? url.lastPathComponent : "External Drive Unavailable"
-    }
-
-    private func persistBookmark(for url: URL) throws {
-        let data = try url.bookmarkData(
-            options: .minimalBookmark,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )
-        defaults.set(data, forKey: bookmarkKey)
-        defaults.set(true, forKey: enabledKey)
-    }
-
-    func useInternalStorage() {
-        defaults.set(false, forKey: enabledKey)
-        // Do not revoke an already-open security scope mid-game. The current
-        // Steam process may still have files open on the USB drive; all scopes
-        // are released when SteamIOS exits.
-        externalEnabled = false
-        displayName = "Internal Storage"
-        LogStore.shared.log("Steam game storage set to internal; applies before the next Steam launch.", level: .success)
-    }
-
-    func presentStorageMenu() {
-        DispatchQueue.main.async {
-            guard let presenter = Self.topViewController() else { return }
-
-            let message = self.externalEnabled
-                ? "Current game library: \(self.displayName). Steam itself stays in the app; game files, compatdata and shader cache can live on USB."
-                : "Games currently use internal app storage. Choose a writable folder on a USB/OTG drive to move the active Steam library off-device."
-
-            let alert = UIAlertController(title: "Steam Game Storage", message: message, preferredStyle: .actionSheet)
-            alert.addAction(UIAlertAction(title: "Choose External Drive…", style: .default) { _ in
-                self.presentFolderPicker()
-            })
-            if self.externalEnabled || self.defaults.bool(forKey: self.enabledKey) {
-                alert.addAction(UIAlertAction(title: "Use Internal Storage", style: .default) { _ in
-                    self.useInternalStorage()
-                })
-            }
-            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-
-            if let pop = alert.popoverPresentationController {
-                pop.sourceView = presenter.view
-                pop.sourceRect = CGRect(x: presenter.view.bounds.midX,
-                                        y: presenter.view.bounds.minY + 44,
-                                        width: 1, height: 1)
-            }
-            presenter.present(alert, animated: true)
-        }
-    }
-
-    private func presentFolderPicker() {
-        DispatchQueue.main.async {
-            guard let presenter = Self.topViewController() else { return }
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
-            picker.delegate = self
-            picker.allowsMultipleSelection = false
-            picker.shouldShowFileExtensions = true
-            presenter.present(picker, animated: true)
-        }
-    }
-
-    func documentPicker(_ controller: UIDocumentPickerViewController,
-                        didPickDocumentsAt urls: [URL]) {
-        guard let url = urls.first else { return }
-
-        let scope = url.startAccessingSecurityScopedResource()
-        defer {
-            if scope { url.stopAccessingSecurityScopedResource() }
-        }
-
-        do {
-            let library = url.appendingPathComponent("SteamIOSLibrary", isDirectory: true)
-            let steamapps = library.appendingPathComponent("steamapps", isDirectory: true)
-            try FileManager.default.createDirectory(
-                at: steamapps,
-                withIntermediateDirectories: true
-            )
-
-            // Verify that the selected volume is writable. Steam updates games,
-            // appmanifest files, shadercache and compatdata in-place.
-            let probe = library.appendingPathComponent(".steamios-write-test-\(UUID().uuidString)")
-            try Data("SteamIOS".utf8).write(to: probe, options: .atomic)
-            try FileManager.default.removeItem(at: probe)
-
-            try persistBookmark(for: url)
-            activate(url)
-            LogStore.shared.log("External Steam library selected: \(url.lastPathComponent)", level: .success)
-            Self.presentInfo(
-                title: "External Drive Ready",
-                message: "SteamIOS will use \(url.lastPathComponent)/SteamIOSLibrary for games on the next Steam launch. Internal storage remains available."
-            )
-        } catch {
-            LogStore.shared.log("External storage selection failed: \(error.localizedDescription)", level: .error)
-            Self.presentInfo(
-                title: "Drive Not Writable",
-                message: "SteamIOS needs a writable folder on the USB/OTG drive so Steam can install and update games."
-            )
-        }
-    }
-
-    /// Called immediately before Steam starts. Returns the physical steamapps
-    /// directory selected for this launch.
-    func configureSteamLibrary(prefixURL: URL, steamRootURL: URL) -> URL {
-        restoreSelection()
-
-        let fm = FileManager.default
-        let documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let internalApps = documents
-            .appendingPathComponent("SteamInternalLibrary", isDirectory: true)
-            .appendingPathComponent("steamapps", isDirectory: true)
-        let liveApps = steamRootURL.appendingPathComponent("steamapps", isDirectory: true)
-
-        do {
-            try fm.createDirectory(at: internalApps, withIntermediateDirectories: true)
-
-            // First migration: preserve any existing internal Steam library.
-            if !Self.isSymbolicLink(liveApps), fm.fileExists(atPath: liveApps.path) {
-                try Self.mergeDirectory(from: liveApps, into: internalApps)
-                if (try? fm.contentsOfDirectory(atPath: liveApps.path).isEmpty) == true {
-                    try? fm.removeItem(at: liveApps)
-                }
-            } else if Self.isSymbolicLink(liveApps) {
-                try? fm.removeItem(at: liveApps)
-            }
-
-            var target = internalApps
-            if externalEnabled, let selectedURL {
-                let externalRoot = selectedURL.appendingPathComponent("SteamIOSLibrary", isDirectory: true)
-                let externalApps = externalRoot.appendingPathComponent("steamapps", isDirectory: true)
-                do {
-                    try fm.createDirectory(at: externalApps, withIntermediateDirectories: true)
-                    target = externalApps
-                    try configureWineExternalDrive(prefixURL: prefixURL, externalRoot: externalRoot)
-                    setenv("MADEIRA_EXTERNAL_GAMES_PATH", externalRoot.path, 1)
-                    LogStore.shared.log("Steam library mapped to USB/OTG: \(externalApps.path)", level: .success)
-                } catch {
-                    externalEnabled = false
-                    displayName = "External Drive Unavailable"
-                    unsetenv("MADEIRA_EXTERNAL_GAMES_PATH")
-                    removeWineExternalDrive(prefixURL: prefixURL)
-                    LogStore.shared.log("External drive unavailable; using internal Steam library.", level: .error)
-                }
-            } else {
-                unsetenv("MADEIRA_EXTERNAL_GAMES_PATH")
-                removeWineExternalDrive(prefixURL: prefixURL)
-            }
-
-            if Self.isSymbolicLink(liveApps) || fm.fileExists(atPath: liveApps.path) {
-                try? fm.removeItem(at: liveApps)
-            }
-            try fm.createSymbolicLink(at: liveApps, withDestinationURL: target)
-            return target
-        } catch {
-            LogStore.shared.log("Steam storage mapping failed: \(error.localizedDescription)", level: .error)
-            return liveApps
-        }
-    }
-
-    private func configureWineExternalDrive(prefixURL: URL, externalRoot: URL) throws {
-        let fm = FileManager.default
-        let dosDevices = prefixURL.appendingPathComponent("dosdevices", isDirectory: true)
-        try fm.createDirectory(at: dosDevices, withIntermediateDirectories: true)
-
-        let eDrive = dosDevices.appendingPathComponent("e:")
-        if Self.isSymbolicLink(eDrive) || fm.fileExists(atPath: eDrive.path) {
-            try? fm.removeItem(at: eDrive)
-        }
-        try fm.createSymbolicLink(at: eDrive, withDestinationURL: externalRoot)
-    }
-
-    private func removeWineExternalDrive(prefixURL: URL) {
-        let eDrive = prefixURL.appendingPathComponent("dosdevices/e:")
-        if Self.isSymbolicLink(eDrive) {
-            try? FileManager.default.removeItem(at: eDrive)
-        }
-    }
-
-    private static func isSymbolicLink(_ url: URL) -> Bool {
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
-    }
-
-    private static func mergeDirectory(from source: URL, into destination: URL) throws {
-        let fm = FileManager.default
-        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
-        for item in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: [.isDirectoryKey]) {
-            let dest = destination.appendingPathComponent(item.lastPathComponent)
-            let values = try item.resourceValues(forKeys: [.isDirectoryKey])
-            if values.isDirectory == true,
-               fm.fileExists(atPath: dest.path),
-               !isSymbolicLink(item) {
-                try mergeDirectory(from: item, into: dest)
-                if (try? fm.contentsOfDirectory(atPath: item.path).isEmpty) == true {
-                    try? fm.removeItem(at: item)
-                }
-            } else if !fm.fileExists(atPath: dest.path) {
-                try fm.moveItem(at: item, to: dest)
-            } else if fm.contentsEqual(atPath: item.path, andPath: dest.path) {
-                try fm.removeItem(at: item)
-            } else {
-                throw NSError(
-                    domain: "SteamIOS.ExternalStorage",
-                    code: 409,
-                    userInfo: [NSLocalizedDescriptionKey:
-                        "Internal Steam library contains a conflicting item named \(item.lastPathComponent). No files were deleted."]
-                )
-            }
-        }
-    }
-
-    private static func topViewController() -> UIViewController? {
-        let scene = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive }
-        var controller = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
-            ?? scene?.windows.first?.rootViewController
-        while let presented = controller?.presentedViewController {
-            controller = presented
-        }
-        if let nav = controller as? UINavigationController {
-            return nav.visibleViewController ?? nav
-        }
-        return controller
-    }
-
-    private static func presentInfo(title: String, message: String) {
-        DispatchQueue.main.async {
-            guard let presenter = topViewController() else { return }
-            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            presenter.present(alert, animated: true)
-        }
-    }
-}
-
 
 // 2026-07-03 window-hosted Metal layer.
 //
@@ -2825,13 +2530,10 @@ struct HoldKeyView: View {
             return false
         }
 
-        let prefixURL = URL(fileURLWithPath: prefix, isDirectory: true)
-        let steamRootURL = URL(fileURLWithPath: unixDir, isDirectory: true)
-        let activeSteamApps = ExternalGameStorageManager.shared.configureSteamLibrary(
-            prefixURL: prefixURL,
-            steamRootURL: steamRootURL
-        )
-        logStore.log("Active Steam game library: \(activeSteamApps.path)", level: .info)
+        // Internal Steam storage remains the default library. If the user chose
+        // a USB/OTG folder, refresh its security scope and register it as the
+        // additional E:\\SteamLibrary library before Steam starts.
+        ExternalSteamStorage.shared.refreshMount()
 
         let bat = """
         @echo off\r
@@ -3214,7 +2916,7 @@ enum TouchControlsHost {
 
 struct TouchControlsOverlay: View {
     @ObservedObject private var m = TouchControlsModel.shared
-    @ObservedObject private var storage = ExternalGameStorageManager.shared
+    @ObservedObject private var externalStorage = ExternalSteamStorage.shared
     @State private var pinchBase: Double?
 
     var body: some View {
@@ -3256,9 +2958,6 @@ struct TouchControlsOverlay: View {
     private var topBar: some View {
         HStack(spacing: 10) {
             glassButton("gamecontroller", dim: !m.visible) { m.visible.toggle() }
-            glassButton("externaldrive", dim: !storage.externalEnabled) {
-                storage.presentStorageMenu()
-            }
             glassButton(m.editing ? "checkmark" : "pencil") {
                 m.editing.toggle()
                 if !m.editing { m.selected = nil }
