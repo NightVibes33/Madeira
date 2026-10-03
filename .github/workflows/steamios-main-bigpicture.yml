@@ -45,13 +45,15 @@ jobs:
           echo "STEAMIOS_XCODE_READY sdk=$sdk"
 
       - name: Restore source/toolchain cache
-        uses: actions/cache@v4
+        id: source-toolchain-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             toolchains/llvm-mingw-20260922-ucrt-macos-universal
             toolchains/llvm-project
             research/freetype
-          key: steamios-main-sources-v1-${{ hashFiles('tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-llvm-project.sh', 'tools/runtime-deps/fetch-freetype.sh') }}
+            app/Madeira/x86_64-vcruntime
+          key: steamios-main-sources-v2-${{ hashFiles('tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-llvm-project.sh', 'tools/runtime-deps/fetch-freetype.sh', 'tools/runtime-deps/fetch-vcruntime.sh') }}
 
       - name: Materialize upstream Madeira sources
         shell: bash
@@ -73,6 +75,17 @@ jobs:
           bash tools/runtime-deps/fetch-freetype.sh
           bash tools/runtime-deps/fetch-vcruntime.sh
           echo "STEAMIOS_MAIN_SOURCES_READY"
+
+      - name: Save source/toolchain cache
+        if: steps.source-toolchain-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal
+            toolchains/llvm-project
+            research/freetype
+            app/Madeira/x86_64-vcruntime
+          key: ${{ steps.source-toolchain-cache.outputs.cache-primary-key }}
 
       - name: Restore compiled runtime cache
         uses: actions/cache@v4
