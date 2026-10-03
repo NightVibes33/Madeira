@@ -75,7 +75,7 @@ Copy-Item -Recurse -Force $steamRoot $runtimeSteam
 $archive = Join-Path $OutputDir "SteamRuntime.tar.gz"
 Push-Location $stage
 try {
-    & tar.exe -czf $archive prefix
+    & tar.exe --format=ustar -czf $archive prefix
     if ($LASTEXITCODE -ne 0) { throw "tar failed" }
 } finally { Pop-Location }
 
