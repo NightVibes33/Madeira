@@ -10,6 +10,7 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
         -DCMAKE_TOOLCHAIN_FILE="$R/FEX/Data/CMake/toolchain_mingw.cmake" \
         -DMINGW_TRIPLE=arm64ec-w64-mingw32 \
         -DFEX_IOS_HOST_BUILD=ON \
+        -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON \
         -DTUNE_ARCH=generic -DTUNE_CPU=none \
         -DCMAKE_C_FLAGS=-DFEX_IOS_HOST \
         -DCMAKE_CXX_FLAGS=-DFEX_IOS_HOST \
