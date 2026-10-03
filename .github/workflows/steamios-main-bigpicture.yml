@@ -48,7 +48,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            toolchains/llvm-mingw-20260421-ucrt-macos-universal
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal
             toolchains/llvm-project
             research/freetype
           key: steamios-main-sources-v1-${{ hashFiles('tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-llvm-project.sh', 'tools/runtime-deps/fetch-freetype.sh') }}
@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           mkdir -p wine/build-macos
           if [[ ! -f wine/build-macos/config.status ]]; then
             (
@@ -122,7 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/gnutls-ios/build.sh
           bash build/freetype-ios/build.sh
           PY_VENV="$PWD/build/steamios-python"
