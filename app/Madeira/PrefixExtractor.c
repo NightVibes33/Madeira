@@ -1,6 +1,7 @@
-// Minimal gzip + ustar extractor. Handles the subset of tar produced by
-// /usr/bin/tar on macOS: regular files (type '0'), directories (type '5'),
-// and pax extended headers (type 'x', ignored).
+// Minimal gzip + ustar extractor used by the bundled Wine prefix.
+// Supports regular files, directories, ustar prefix fields, and skipping
+// pax/GNU metadata records. Clean SteamIOS builds emit --format=ustar so
+// long Steam client paths remain deterministic without pax path overrides.
 
 #include "PrefixExtractor.h"
 
@@ -26,7 +27,7 @@ static int parse_octal(const char *s, size_t n) {
 }
 
 static int mkdir_p(const char *path) {
-    char buf[1024];
+    char buf[1200];
     strncpy(buf, path, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = 0;
     for (char *p = buf + 1; *p; p++) {
@@ -40,13 +41,39 @@ static int mkdir_p(const char *path) {
     return 0;
 }
 
-int madeira_extract_prefix_tgz(const char *tgz_path, const char *dest_dir) {
+static void header_path(const char *header, char *out, size_t out_size) {
+    char name[101] = {0};
+    char prefix[156] = {0};
+    memcpy(name, header, 100);
+    memcpy(prefix, header + 345, 155);
+    if (prefix[0])
+        snprintf(out, out_size, "%s/%s", prefix, name);
+    else
+        snprintf(out, out_size, "%s", name);
+}
+
+static int skip_payload(gzFile gz, int size, char *buf) {
+    int pad = (size + BLOCK - 1) / BLOCK * BLOCK;
+    while (pad > 0) {
+        if (gzread(gz, buf, BLOCK) != BLOCK) return -1;
+        pad -= BLOCK;
+    }
+    return 0;
+}
+
+static int selected_path(const char *relname, const char *subtree) {
+    if (!subtree || !*subtree) return 1;
+    size_t n = strlen(subtree);
+    return strcmp(relname, subtree) == 0 ||
+           (strncmp(relname, subtree, n) == 0 && relname[n] == '/');
+}
+
+static int extract_impl(const char *tgz_path, const char *dest_dir, const char *subtree) {
     gzFile gz = gzopen(tgz_path, "rb");
     if (!gz) {
         fprintf(stderr, "[prefix-extract] gzopen failed: %s\n", tgz_path);
         return -1;
     }
-
     if (mkdir_p(dest_dir) != 0) {
         fprintf(stderr, "[prefix-extract] mkdir_p dest failed: %s\n", dest_dir);
         gzclose(gz);
@@ -55,7 +82,7 @@ int madeira_extract_prefix_tgz(const char *tgz_path, const char *dest_dir) {
 
     char header[BLOCK];
     char buf[BLOCK];
-    int files = 0, dirs = 0;
+    int files = 0, dirs = 0, skipped = 0;
 
     for (;;) {
         int n = gzread(gz, header, BLOCK);
@@ -65,31 +92,32 @@ int madeira_extract_prefix_tgz(const char *tgz_path, const char *dest_dir) {
             gzclose(gz);
             return -1;
         }
-        // End-of-archive: two zero blocks. Bail on any all-zero block.
+
         int all_zero = 1;
         for (int i = 0; i < BLOCK; i++) if (header[i]) { all_zero = 0; break; }
         if (all_zero) break;
 
-        char name[101] = {0};
-        memcpy(name, header, 100);
+        char archive_name[300] = {0};
+        header_path(header, archive_name, sizeof(archive_name));
         int size = parse_octal(header + 124, 12);
+        if (size < 0) {
+            fprintf(stderr, "[prefix-extract] invalid size for %s\n", archive_name);
+            gzclose(gz);
+            return -1;
+        }
         char type = header[156];
 
-        // Strip leading "prefix/" so files land directly under dest_dir.
-        const char *relname = name;
+        const char *relname = archive_name;
         if (strncmp(relname, "prefix/", 7) == 0) relname += 7;
         else if (strcmp(relname, "prefix") == 0) relname = "";
 
-        char outpath[1200];
-        if (*relname) {
-            snprintf(outpath, sizeof(outpath), "%s/%s", dest_dir, relname);
-        } else {
-            snprintf(outpath, sizeof(outpath), "%s", dest_dir);
-        }
+        int selected = *relname && selected_path(relname, subtree);
 
-        if (type == '5' || (type == 0 && name[strlen(name) - 1] == '/')) {
-            // Directory
-            if (*relname) {
+        if (type == '5' || (type == 0 && archive_name[0] &&
+                            archive_name[strlen(archive_name) - 1] == '/')) {
+            if (selected) {
+                char outpath[1500];
+                snprintf(outpath, sizeof(outpath), "%s/%s", dest_dir, relname);
                 if (mkdir_p(outpath) != 0) {
                     fprintf(stderr, "[prefix-extract] mkdir %s: %s\n", outpath, strerror(errno));
                     gzclose(gz);
@@ -98,12 +126,23 @@ int madeira_extract_prefix_tgz(const char *tgz_path, const char *dest_dir) {
                 dirs++;
             }
         } else if (type == '0' || type == 0) {
-            // Regular file — ensure parent dir, then write size bytes
-            char parent[1200];
+            if (!selected) {
+                if (skip_payload(gz, size, buf) != 0) {
+                    fprintf(stderr, "[prefix-extract] short skip for %s\n", relname);
+                    gzclose(gz);
+                    return -1;
+                }
+                skipped++;
+                continue;
+            }
+
+            char outpath[1500];
+            snprintf(outpath, sizeof(outpath), "%s/%s", dest_dir, relname);
+            char parent[1500];
             strncpy(parent, outpath, sizeof(parent) - 1);
             parent[sizeof(parent) - 1] = 0;
             char *slash = strrchr(parent, '/');
-            if (slash) { *slash = 0; mkdir_p(parent); }
+            if (slash) { *slash = 0; if (mkdir_p(parent) != 0) { gzclose(gz); return -1; } }
 
             int fd = open(outpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) {
@@ -131,28 +170,29 @@ int madeira_extract_prefix_tgz(const char *tgz_path, const char *dest_dir) {
             }
             close(fd);
             files++;
-        } else if (type == 'x' || type == 'g' || type == 'L' || type == 'K') {
-            // pax extended / GNU long-name headers — skip payload
-            int pad = (size + BLOCK - 1) / BLOCK * BLOCK;
-            while (pad > 0) {
-                if (gzread(gz, buf, BLOCK) != BLOCK) {
-                    fprintf(stderr, "[prefix-extract] short ext-header skip\n");
-                    gzclose(gz);
-                    return -1;
-                }
-                pad -= BLOCK;
-            }
         } else {
-            // Unknown type — skip its data blocks
-            int pad = (size + BLOCK - 1) / BLOCK * BLOCK;
-            while (pad > 0) {
-                if (gzread(gz, buf, BLOCK) != BLOCK) break;
-                pad -= BLOCK;
+            if (skip_payload(gz, size, buf) != 0) {
+                fprintf(stderr, "[prefix-extract] short metadata skip for %s\n", archive_name);
+                gzclose(gz);
+                return -1;
             }
         }
     }
 
     gzclose(gz);
-    fprintf(stderr, "[prefix-extract] extracted %d files, %d dirs to %s\n", files, dirs, dest_dir);
+    fprintf(stderr, "[prefix-extract] extracted %d files, %d dirs, skipped %d to %s%s%s\n",
+            files, dirs, skipped, dest_dir,
+            subtree ? " subtree=" : "", subtree ? subtree : "");
     return 0;
+}
+
+int madeira_extract_prefix_tgz(const char *tgz_path, const char *dest_dir) {
+    return extract_impl(tgz_path, dest_dir, NULL);
+}
+
+int madeira_extract_prefix_subtree_tgz(const char *tgz_path,
+                                       const char *dest_dir,
+                                       const char *subtree) {
+    if (!subtree || !*subtree) return -1;
+    return extract_impl(tgz_path, dest_dir, subtree);
 }
