@@ -28,6 +28,7 @@
 set -euo pipefail
 
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+python3 "$R/tools/patches/apply-dxmt-stdlib-headers.py" "$R/research/dxmt"
 TC="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin"
 export PATH="$TC:$PATH"
 B="$R/wine/build-i386"
