@@ -1,0 +1,38 @@
+name: Publish SteamIOS runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [steamios-main-bigpicture]
+    paths:
+      - "build/steamios-runtime/build-runtime.ps1"
+      - ".github/workflows/publish-steamios-runtime.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: steamios-runtime
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build current Valve Steam runtime
+        shell: pwsh
+        run: ./build/steamios-runtime/build-runtime.ps1 -OutputDir "$env:RUNNER_TEMP\steamios-runtime"
+
+      - name: Publish rolling runtime asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = "$env:RUNNER_TEMP\steamios-runtime"
+          gh release view steamios-runtime *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create steamios-runtime --title "SteamIOS Runtime" --notes "Rolling Valve Steam client runtime used by thin SteamIOS installs."
+          }
+          gh release upload steamios-runtime "$dir\SteamRuntime.tar.gz" "$dir\SteamRuntime.json" --clobber
