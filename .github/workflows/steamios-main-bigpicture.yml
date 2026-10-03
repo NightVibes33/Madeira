@@ -153,6 +153,7 @@ jobs:
           echo "STEAMIOS_WINE_HOST_READY"
 
       - name: Build cacheable native iOS core
+        if: steps.durable-fex-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -161,6 +162,17 @@ jobs:
           bash build/freetype-ios/build.sh
           bash build/fex-ios/build.sh
           echo "STEAMIOS_MAIN_NATIVE_FEX_BUILT"
+
+      - name: Verify cached native iOS core
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s toolchains/gnutls-ios/lib/libgnutls.a
+          test -s build/freetype-ios/build/libfreetype.a
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore.a
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
+          test -s FEX/build-ios/FEXCore/Source/libJemallocLibs.a
+          echo "STEAMIOS_MAIN_NATIVE_FEX_READY"
 
       - name: Save durable native/FEX cache
         if: steps.durable-fex-cache.outputs.cache-hit != 'true'
