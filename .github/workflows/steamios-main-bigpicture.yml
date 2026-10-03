@@ -1,0 +1,208 @@
+name: SteamIOS upstream Big Picture IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [steamios-main-bigpicture]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamios-main-bigpicture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: upstream Madeira -> thin SteamIOS IPA
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build prerequisites
+        run: brew install bison ccache ninja meson sevenzip cmake pkg-config
+
+      - name: Verify Xcode 27 and Metal tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          [[ "$sdk" == 27.* ]]
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+          echo "STEAMIOS_XCODE_READY sdk=$sdk"
+
+      - name: Restore source/toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/llvm-mingw-20260421-ucrt-macos-universal
+            toolchains/llvm-project
+            research/freetype
+          key: steamios-main-sources-v1-${{ hashFiles('tools/bootstrap/fetch-llvm-mingw.sh', 'tools/runtime-deps/fetch-llvm-project.sh', 'tools/runtime-deps/fetch-freetype.sh') }}
+
+      - name: Materialize upstream Madeira sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          retry() {
+            local n=0
+            until "$@"; do
+              n=$((n+1))
+              [ "$n" -lt 4 ] || return 1
+              sleep $((n*5))
+            done
+          }
+          retry git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 FEX
+          retry git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 wine
+          retry git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 research/dxmt
+          bash tools/bootstrap/fetch-llvm-mingw.sh
+          bash tools/runtime-deps/fetch-llvm-project.sh
+          bash tools/runtime-deps/fetch-freetype.sh
+          bash tools/runtime-deps/fetch-vcruntime.sh
+          echo "STEAMIOS_MAIN_SOURCES_READY"
+
+      - name: Restore compiled runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            FEX/build-ios
+            FEX/build-arm64ec
+            wine/build-macos
+            wine/build-arm64ec
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            build/freetype-ios/build
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: steamios-main-runtime-v1-${{ hashFiles('build/fex-ios/build.sh', 'build/fex-arm64ec/build.sh', 'build/wineserver/build.sh', 'build/wine-pe/build-ntdll.sh', 'build/ntdll-unix/build.sh', 'build/win32u-unix/build.sh', 'build/dxmt-ios/build.sh', 'build/llvm-ios/build.sh') }}
+
+      - name: Configure compiler cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache --set-config=compiler_check="$CCACHE_COMPILERCHECK"
+          ccache --set-config=base_dir="$CCACHE_BASEDIR"
+          ccache --set-config=hash_dir=false
+          ccache --zero-stats
+
+      - name: Configure Wine host headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          mkdir -p wine/build-macos
+          if [[ ! -f wine/build-macos/config.status ]]; then
+            (
+              cd wine/build-macos
+              ../configure --without-x --disable-tests
+            )
+          fi
+          echo "STEAMIOS_WINE_HOST_READY"
+
+      - name: Build upstream Madeira runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/gnutls-ios/build.sh
+          bash build/freetype-ios/build.sh
+          bash build/fex-ios/build.sh
+          bash build/fex-arm64ec/build.sh
+          bash build/wine-pe/build-ntdll.sh
+          bash build/wineserver/build.sh all
+          bash build/ntdll-unix/build.sh
+          bash build/win32u-unix/build.sh
+          bash build/llvm-ios/build.sh
+          bash build/dxmt-ios/build.sh
+          bash build/stage-licenses.sh
+          echo "STEAMIOS_MAIN_RUNTIME_BUILT"
+
+      - name: Build unsigned Debug iPhoneOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build/steamios-main-derived
+          xcodebuild \
+            -project app/Madeira.xcodeproj \
+            -scheme Madeira \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/steamios-main-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee build/steamios-main-xcodebuild.log
+
+      - name: Package and audit thin IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find build/steamios-main-derived/Build/Products/Debug-iphoneos -maxdepth 1 -type d -name 'SteamIOS.app' -print -quit)"
+          test -n "$APP"
+          test -s "$APP/SteamIOS"
+          test -s "$APP/Info.plist"
+
+          if find "$APP" -type f -iname 'steam.exe' -print -quit | grep -q .; then
+            echo "error: Steam client leaked into the IPA" >&2
+            exit 1
+          fi
+          if find "$APP" -type d -name 'i386-windows' -print -quit | grep -q .; then
+            echo "error: optional i386 Wine farm leaked into the thin SteamIOS IPA" >&2
+            exit 1
+          fi
+          if [[ -f "$APP/prefix-template.tar.gz" ]] &&
+             tar -tzf "$APP/prefix-template.tar.gz" | grep -Eqi '(^|/)Steam/steam\.exe$'; then
+            echo "error: prefix-template still embeds Steam" >&2
+            exit 1
+          fi
+
+          rm -rf artifacts
+          mkdir -p artifacts/Payload
+          /usr/bin/ditto "$APP" artifacts/Payload/SteamIOS.app
+          (
+            cd artifacts
+            /usr/bin/zip -qry -9 SteamIOS.ipa Payload
+            rm -rf Payload
+          )
+          shasum -a 256 artifacts/SteamIOS.ipa > artifacts/SteamIOS.ipa.sha256
+          app_bytes="$(du -sk "$APP" | awk '{print $1 * 1024}')"
+          ipa_bytes="$(stat -f%z artifacts/SteamIOS.ipa)"
+          printf 'app_bytes=%s\nipa_bytes=%s\n' "$app_bytes" "$ipa_bytes" | tee artifacts/size.txt
+          unzip -tq artifacts/SteamIOS.ipa
+          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/SteamIOS\.app/Info\.plist$'
+          echo "STEAMIOS_THIN_IPA_OK app_bytes=$app_bytes ipa_bytes=$ipa_bytes"
+
+      - name: Cache statistics
+        if: always()
+        shell: bash
+        run: |
+          ccache --show-stats || true
+          du -sh "$CCACHE_DIR" 2>/dev/null || true
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-upstream-BigPicture-unsigned
+          path: |
+            artifacts/SteamIOS.ipa
+            artifacts/SteamIOS.ipa.sha256
+            artifacts/size.txt
+            build/steamios-main-xcodebuild.log
+          if-no-files-found: error
+          compression-level: 0
