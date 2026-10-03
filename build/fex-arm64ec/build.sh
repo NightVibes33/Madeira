@@ -3,7 +3,7 @@
 # shipped as xtajit64.dll). Options mirror the development build's CMakeCache.
 set -eu
 R="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-export PATH="$R/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+export PATH="$R/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:$PATH"
 B="$R/FEX/build-arm64ec"
 if [ ! -f "$B/CMakeCache.txt" ]; then
     cmake -S "$R/FEX" -B "$B" -DCMAKE_BUILD_TYPE=Release \
