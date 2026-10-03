@@ -8,6 +8,7 @@ set -eu
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 python3 "$REPO_ROOT/tools/patches/apply-dxmt-stdlib-headers.py" "$REPO_ROOT/research/dxmt"
+python3 "$BUILD_DIR/apply-xcode27-source-fixes.py" "$REPO_ROOT/research/dxmt"
 DXMT_SRC="$REPO_ROOT/research/dxmt/src"
 DXMT_ROOT="$REPO_ROOT/research/dxmt"
 LLVM_SRC="$REPO_ROOT/toolchains/llvm-project/llvm"
@@ -58,6 +59,16 @@ SUCCEEDED=0
 FAILED=0
 FAILED_FILES=""
 
+report_compile_failure() {
+    local name=$1
+    echo "FAILED"
+    echo "----- $name compiler diagnostics -----" >&2
+    sed -n '1,260p' "$OBJ_DIR/$name.err" >&2 || true
+    echo "----- end $name diagnostics -----" >&2
+    FAILED=$((FAILED+1))
+    FAILED_FILES="$FAILED_FILES $name"
+}
+
 compile_objc() {
     local src=$1 name=$2
     # MADEIRA_ONLY=<name>: recompile one object only. madeira_ir_unix carries a __DATE__
@@ -68,7 +79,7 @@ compile_objc() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -82,7 +93,7 @@ compile_cxx() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -95,7 +106,7 @@ compile_madeira_cxx() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -107,7 +118,7 @@ compile_madeira_c() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 
@@ -125,7 +136,7 @@ compile_objcxx_arc() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 }
 if [[ -f "$BUILD_DIR/../madeira-d3d12/deps.sh" ]] && \
@@ -165,6 +176,19 @@ echo "=== winemetal unix (Objective-C) ==="
 compile_objc "$DXMT_SRC/winemetal/unix/winemetal_unix.c" winemetal_unix
 compile_objc "$DXMT_SRC/winemetal/unix/cache.c"          cache
 
+echo "=== airconv embedded Metal helper AIR ==="
+mkdir -p "$BUILD_DIR/shader-headers"
+for shader in air_msad air_samplepos air_tessellation; do
+    src="$DXMT_SRC/airconv/shaders/$shader.metal"
+    air="$BUILD_DIR/shader-headers/$shader.air"
+    hdr="$BUILD_DIR/shader-headers/$shader.h"
+    xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0 \
+        -o "$air" -c "$src"
+    xxd -n "$shader" -i "$air" "$hdr"
+    test -s "$hdr"
+    echo "  $shader.h                               OK"
+done
+
 echo "=== airconv (C++ 20, needs LLVM headers) ==="
 for cpp in airconv_context.cpp air_type.cpp air_signature.cpp air_operations.cpp \
            dxbc_converter.cpp dxbc_converter_gs.cpp dxbc_converter_ts.cpp \
@@ -188,7 +212,7 @@ for cpp in BlobContainer.cpp DXBCUtils.cpp ShaderBinary.cpp; do
             -c "$DXMT_ROOT/libs/DXBCParser/$cpp" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        report_compile_failure "$name"
     fi
 done
 
