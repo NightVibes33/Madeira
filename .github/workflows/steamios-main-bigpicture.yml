@@ -3,7 +3,7 @@ name: SteamIOS upstream Big Picture IPA
 on:
   workflow_dispatch:
   push:
-    branches: [steamios-main-bigpicture]
+    branches: [steamios-main-bigpicture, steamios-external-storage]
 
 permissions:
   contents: read
