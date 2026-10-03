@@ -575,9 +575,11 @@ struct HoldKeyView: View {
         unsetenv("MADEIRA_DUMP_SURFACES")
         unsetenv("MADEIRA_SRCWATCH")
 
-        setenv("MADEIRA_EXE", "explorer.exe", 1)
-        setenv("MADEIRA_ARGS",
-               "/desktop=shell,\(deskW)x\(deskH) cmd /c C:\\steam-launch.bat", 1)
+        // Windowless native ARM64 Wine bootstrap. It starts services.exe
+        // hidden, then CreateProcessW() launches the real Steam client with
+        // -gamepadui. No Explorer desktop and no cmd/conhost window are created.
+        setenv("MADEIRA_EXE", "steamios-launcher.exe", 1)
+        unsetenv("MADEIRA_ARGS")
         setenv("MADEIRA_DESKTOP", "1", 1)
         setenv("MADEIRA_SCREEN_W", String(deskW), 1)
         setenv("MADEIRA_SCREEN_H", String(deskH), 1)
