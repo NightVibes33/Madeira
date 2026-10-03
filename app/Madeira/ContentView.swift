@@ -5,6 +5,60 @@ import QuartzCore
 import Metal
 import os.log
 
+
+@MainActor
+private enum SteamIOSOrientation {
+    static func requestLandscape() {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else {
+            return
+        }
+        scene.requestGeometryUpdate(
+            UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: .landscape)
+        )
+        DispatchQueue.main.async {
+            MetalBackedView.refreshPresentationGeometry()
+            TouchControlsHost.attach()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            MetalBackedView.refreshPresentationGeometry()
+            TouchControlsHost.attach()
+        }
+    }
+}
+
+private enum SteamIOSDisplayProfile {
+    static func preferredDesktopSize() -> (width: Int, height: Int) {
+        let native = UIScreen.main.nativeBounds.size
+        let longEdge = max(native.width, native.height)
+        let shortEdge = max(min(native.width, native.height), 1)
+        let aspect = longEdge / shortEdge
+
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let height = isPad ? 900 : 720
+        let minWidth = isPad ? 1024 : 1152
+        let maxWidth = isPad ? 1440 : 1600
+        var width = Int((CGFloat(height) * aspect).rounded())
+        width = min(max(width, minWidth), maxWidth)
+        width = ((width + 7) / 8) * 8
+        return (width, height)
+    }
+
+    static func activeGuestSize() -> CGSize {
+        let fallback = preferredDesktopSize()
+        func dim(_ name: String, _ fallback: Int) -> CGFloat {
+            guard let raw = getenv(name),
+                  let value = Double(String(cString: raw)),
+                  value >= 64 else { return CGFloat(fallback) }
+            return CGFloat(value)
+        }
+        return CGSize(
+            width: dim("MADEIRA_SCREEN_W", fallback.width),
+            height: dim("MADEIRA_SCREEN_H", fallback.height)
+        )
+    }
+}
+
 // 2026-07-03 window-hosted Metal layer.
 //
 // The presenting CAMetalLayer must NOT be a SwiftUI-hosted view's backing
@@ -97,6 +151,13 @@ final class MetalBackedView: UIView {
         else { v.becomeFirstResponder() }
     }
 
+    @MainActor
+    static func refreshPresentationGeometry() {
+        guard let v = keyboardTarget else { return }
+        v.setNeedsLayout()
+        v.layoutIfNeeded()
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         GamepadEventClaim.install(on: self)
@@ -123,16 +184,18 @@ final class MetalBackedView: UIView {
     // ~1 FPS content mostly doesn't. Resolution path: raise game FPS (perf
     // work), with a steady-rate re-present in DXMT as fallback insurance.
 
-    /// Largest 4:3 rect (the 1024×768 logical surface's aspect) that fits
-    /// centered in our bounds. The window-level host view gets THIS frame,
-    /// not our full bounds — otherwise landscape stretches the game to the
-    /// display edges (2026-07-05). Touch mapping uses the same rect so
-    /// letterboxing never skews input.
+    /// Aspect-fit the active Windows desktop into the actual iPhone/iPad view.
+    /// Steam Big Picture is not forced through Madeira's old 1024x768 test frame.
     private func gameRect() -> CGRect {
-        let gw: CGFloat = 1024, gh: CGFloat = 768
-        let scale = min(bounds.width / gw, bounds.height / gh)
-        let w = gw * scale, h = gh * scale
-        return CGRect(x: (bounds.width - w) / 2, y: (bounds.height - h) / 2,
+        let guest = SteamIOSDisplayProfile.activeGuestSize()
+        var container = bounds
+        if let window, bounds.height >= window.bounds.height * 0.80 {
+            container = bounds.inset(by: window.safeAreaInsets)
+        }
+        let scale = min(container.width / guest.width, container.height / guest.height)
+        let w = guest.width * scale
+        let h = guest.height * scale
+        return CGRect(x: container.midX - w / 2, y: container.midY - h / 2,
                       width: max(w, 1), height: max(h, 1))
     }
 
@@ -157,12 +220,13 @@ final class MetalBackedView: UIView {
             host.removeFromSuperview()
             w.addSubview(host)
         }
-        host.frame = convert(gameRect(), to: w)
-        // S2 desktop mode: the winios compositor renders the wine virtual
-        // desktop aspect-fit inside THIS placeholder's area, exactly like
-        // the games' Metal layer — never over the whole phone screen.
-        let full = convert(bounds, to: w)
-        winios_set_compositor_frame(full.minX, full.minY, full.width, full.height)
+        let presentation = convert(gameRect(), to: w)
+        host.frame = presentation
+        // Metal, Wine compositor and touch mapping share one exact aspect-fit.
+        winios_set_compositor_frame(
+            presentation.minX, presentation.minY,
+            presentation.width, presentation.height
+        )
         if !Self.layerRegistered {
             Self.layerRegistered = true
             madeira_display_set_layer(host.metalLayer)
@@ -173,9 +237,12 @@ final class MetalBackedView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         if let w = window {
-            MetalHostView.shared.frame = convert(gameRect(), to: w)
-            let full = convert(bounds, to: w)
-            winios_set_compositor_frame(full.minX, full.minY, full.width, full.height)
+            let presentation = convert(gameRect(), to: w)
+            MetalHostView.shared.frame = presentation
+            winios_set_compositor_frame(
+                presentation.minX, presentation.minY,
+                presentation.width, presentation.height
+            )
         }
     }
 
@@ -185,8 +252,11 @@ final class MetalBackedView: UIView {
     private func mapTouch(_ touch: UITouch) -> (Int32, Int32) {
         let p = touch.location(in: self)
         let r = gameRect()
-        let x = Int32(min(max((p.x - r.minX) * 1024 / r.width, 0), 1023))
-        let y = Int32(min(max((p.y - r.minY) * 768 / r.height, 0), 767))
+        let guest = SteamIOSDisplayProfile.activeGuestSize()
+        let maxX = max(guest.width - 1, 0)
+        let maxY = max(guest.height - 1, 0)
+        let x = Int32(min(max((p.x - r.minX) * guest.width / r.width, 0), maxX))
+        let y = Int32(min(max((p.y - r.minY) * guest.height / r.height, 0), maxY))
         return (x, y)
     }
 
@@ -201,7 +271,10 @@ final class MetalBackedView: UIView {
     // Cursor position lives here (desktop px); wine + the rendered arrow
     // follow via winios_pointer / winios_cursor_move.
     // ==================================================================
-    private static var cursor = CGPoint(x: 480, y: 270)
+    private static var cursor: CGPoint = {
+        let s = SteamIOSDisplayProfile.activeGuestSize()
+        return CGPoint(x: s.width / 2, y: s.height / 2)
+    }()
     private var lastPanPoint = CGPoint.zero
     private var touchStartPoint = CGPoint.zero
     private var touchStartTime: TimeInterval = 0
@@ -359,8 +432,9 @@ final class MetalBackedView: UIView {
         }
 
         let sens = CGFloat(InputSettings.shared.sensAbs)   // desktop px per view pt
-        let maxX = CGFloat(envInt("MADEIRA_SCREEN_W", 1024) - 1)
-        let maxY = CGFloat(envInt("MADEIRA_SCREEN_H", 768) - 1)
+        let fallback = SteamIOSDisplayProfile.preferredDesktopSize()
+        let maxX = CGFloat(envInt("MADEIRA_SCREEN_W", fallback.width) - 1)
+        let maxY = CGFloat(envInt("MADEIRA_SCREEN_H", fallback.height) - 1)
         Self.cursor.x = min(max(Self.cursor.x + dx * sens, 0), maxX)
         Self.cursor.y = min(max(Self.cursor.y + dy * sens, 0), maxY)
         postPointer(F_MOVE | F_ABS)
@@ -486,6 +560,7 @@ struct HoldKeyView: View {
         guard !steamProductStarted else { return }
         steamProductStarted = true
         steamStartupError = nil
+        SteamIOSOrientation.requestLandscape()
 
         if jit_check_debugged() {
             ensureSteamRuntimeThenLaunch()
@@ -566,8 +641,9 @@ struct HoldKeyView: View {
     private func launchSteamBigPicture() {
         // Use upstream Madeira's proven Steam path. Only the product-facing
         // launch mode changes: Steam enters the controller UI immediately.
-        let deskW = 1280
-        let deskH = 720
+        let desktop = SteamIOSDisplayProfile.preferredDesktopSize()
+        let deskW = desktop.width
+        let deskH = desktop.height
 
         unsetenv("FEX_O0")
         unsetenv("MADEIRA_NO_DFE")
