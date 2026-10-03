@@ -117,6 +117,16 @@ jobs:
             FEX/build-ios
           key: steamios-main-native-fex-v1-${{ hashFiles('build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh', 'build/fex-ios/build.sh', 'tools/patches/apply-fex-ios-native-host.py') }}
 
+      - name: Restore durable i386 Wine/DXMT cache
+        id: durable-i386-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            wine/build-i386
+            research/dxmt/build-pe-i386
+            app/Madeira/i386-windows
+          key: steamios-main-i386-v1-${{ hashFiles('build/wine-i386/build.sh', 'tools/patches/apply-dxmt-stdlib-headers.py') }}
+
       - name: Configure compiler cache
         shell: bash
         run: |
@@ -163,7 +173,7 @@ jobs:
             FEX/build-ios
           key: ${{ steps.durable-fex-cache.outputs.cache-primary-key }}
 
-      - name: Build upstream Madeira runtime
+      - name: Build Windows translation runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -176,8 +186,34 @@ jobs:
           bash build/fex-arm64ec/build.sh
           bash build/fex-wow64/build.sh
           bash build/steamios-launcher/build.sh
-          bash build/wine-i386/build.sh
           test -s app/Madeira/aarch64-windows/steamios-launcher.exe
+          echo "STEAMIOS_WINDOWS_TRANSLATION_READY"
+
+      - name: Build i386 Wine/DXMT farm
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
+          bash build/wine-i386/build.sh
+          test -d app/Madeira/i386-windows
+          test -s app/Madeira/i386-windows/kernel32.dll
+          echo "STEAMIOS_I386_FARM_READY"
+
+      - name: Save durable i386 Wine/DXMT cache
+        if: steps.durable-i386-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            wine/build-i386
+            research/dxmt/build-pe-i386
+            app/Madeira/i386-windows
+          key: ${{ steps.durable-i386-cache.outputs.cache-primary-key }}
+
+      - name: Build remaining upstream Madeira runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/toolchains/llvm-mingw-20260922-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/wine-pe/build-ntdll.sh
           bash build/wineserver/build.sh all
           bash build/ntdll-unix/build.sh
