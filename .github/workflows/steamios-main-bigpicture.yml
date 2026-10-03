@@ -125,9 +125,16 @@ jobs:
           export PATH="$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:/opt/homebrew/opt/bison/bin:$PATH"
           bash build/gnutls-ios/build.sh
           bash build/freetype-ios/build.sh
+          PY_VENV="$PWD/build/steamios-python"
+          rm -rf "$PY_VENV"
+          python3 -m venv "$PY_VENV"
+          "$PY_VENV/bin/python" -m pip install --disable-pip-version-check --quiet 'packaging==24.2'
+          export PATH="$PY_VENV/bin:$PATH"
           bash build/fex-ios/build.sh
           bash build/fex-arm64ec/build.sh
+          bash build/fex-wow64/build.sh
           bash build/steamios-launcher/build.sh
+          bash build/wine-i386/build.sh
           test -s app/Madeira/aarch64-windows/steamios-launcher.exe
           bash build/wine-pe/build-ntdll.sh
           bash build/wineserver/build.sh all
