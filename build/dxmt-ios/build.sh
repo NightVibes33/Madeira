@@ -7,6 +7,7 @@ set -eu
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
+python3 "$REPO_ROOT/tools/patches/apply-dxmt-stdlib-headers.py" "$REPO_ROOT/research/dxmt"
 DXMT_SRC="$REPO_ROOT/research/dxmt/src"
 DXMT_ROOT="$REPO_ROOT/research/dxmt"
 LLVM_SRC="$REPO_ROOT/toolchains/llvm-project/llvm"
