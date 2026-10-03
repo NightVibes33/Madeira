@@ -81,14 +81,17 @@ jobs:
             .ccache
             FEX/build-ios
             FEX/build-arm64ec
+            FEX/build-wow64
             wine/build-macos
             wine/build-arm64ec
+            wine/build-i386
+            app/Madeira/i386-windows
             toolchains/gnutls-ios
             build/gnutls-ios/obj
             build/freetype-ios/build
             toolchains/llvm-host-build
             toolchains/llvm-ios-build
-          key: steamios-main-runtime-v1-${{ hashFiles('build/fex-ios/build.sh', 'build/fex-arm64ec/build.sh', 'build/wineserver/build.sh', 'build/wine-pe/build-ntdll.sh', 'build/ntdll-unix/build.sh', 'build/win32u-unix/build.sh', 'build/dxmt-ios/build.sh', 'build/llvm-ios/build.sh') }}
+          key: steamios-main-runtime-v2-${{ hashFiles('build/fex-ios/build.sh', 'build/fex-arm64ec/build.sh', 'build/fex-wow64/build.sh', 'build/wine-i386/build.sh', 'build/wineserver/build.sh', 'build/wine-pe/build-ntdll.sh', 'build/ntdll-unix/build.sh', 'build/win32u-unix/build.sh', 'build/dxmt-ios/build.sh', 'build/llvm-ios/build.sh', 'build/steamios-launcher/build.sh') }}
 
       - name: Configure compiler cache
         shell: bash
@@ -164,10 +167,8 @@ jobs:
             echo "error: Steam client leaked into the IPA" >&2
             exit 1
           fi
-          if find "$APP" -type d -name 'i386-windows' -print -quit | grep -q .; then
-            echo "error: optional i386 Wine farm leaked into the thin SteamIOS IPA" >&2
-            exit 1
-          fi
+          test -s "$APP/aarch64-windows/steamios-launcher.exe"
+          test -d "$APP/i386-windows"
           if [[ -f "$APP/prefix-template.tar.gz" ]] &&
              tar -tzf "$APP/prefix-template.tar.gz" | grep -Eqi '(^|/)Steam/steam\.exe$'; then
             echo "error: prefix-template still embeds Steam" >&2
