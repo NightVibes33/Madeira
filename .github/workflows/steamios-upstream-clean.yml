@@ -131,21 +131,13 @@ jobs:
           if [[ ! -d app/Madeira/x86_64-vcruntime ]] || [[ -z "$(find app/Madeira/x86_64-vcruntime -maxdepth 1 -name '*.dll' -print -quit 2>/dev/null)" ]]; then
             echo "x86_64-vcruntime cache miss; materializing pinned Microsoft runtime"
             TMP="$(mktemp -d)"
-            EXE="$TMP/VC_redist.x64.exe"
-            curl -fL --retry 3 --retry-delay 2               "https://download.visualstudio.microsoft.com/download/pr/c1bd4f2c-3672-468e-8480-7ed419dbb641/90E48ADE404E4576D023ABFA374F323555F233982A8805EA9AC63DCA9491A16B/VC_redist.x64.exe"               -o "$EXE"
-            GOT="$(shasum -a 256 "$EXE" | awk '{print toupper($1)}')"
-            [[ "$GOT" == "90E48ADE404E4576D023ABFA374F323555F233982A8805EA9AC63DCA9491A16B" ]]
-            # Reuse the verified extractor from the last green SteamIOS branch.
-            git show steamios-main-bigpicture:tools/runtime-deps/fetch-vcruntime.sh > "$TMP/fetch-vcruntime.sh" || true
-            if [[ -s "$TMP/fetch-vcruntime.sh" ]]; then
-              mkdir -p tools/runtime-deps
-              cp "$TMP/fetch-vcruntime.sh" tools/runtime-deps/.ci-fetch-vcruntime.sh
-              bash tools/runtime-deps/.ci-fetch-vcruntime.sh
-              rm -f tools/runtime-deps/.ci-fetch-vcruntime.sh
-            else
-              echo "error: verified VC runtime cache is required" >&2
-              exit 1
-            fi
+            git -c http.version=HTTP/1.1 fetch --no-tags --depth 1 origin steamios-main-bigpicture
+            git show FETCH_HEAD:tools/runtime-deps/fetch-vcruntime.sh > "$TMP/fetch-vcruntime.sh"
+            test -s "$TMP/fetch-vcruntime.sh"
+            mkdir -p tools/runtime-deps
+            cp "$TMP/fetch-vcruntime.sh" tools/runtime-deps/.ci-fetch-vcruntime.sh
+            bash tools/runtime-deps/.ci-fetch-vcruntime.sh
+            rm -f tools/runtime-deps/.ci-fetch-vcruntime.sh
             rm -rf "$TMP"
           fi
           echo "STEAMIOS_EXTERNAL_DEPS_READY"
