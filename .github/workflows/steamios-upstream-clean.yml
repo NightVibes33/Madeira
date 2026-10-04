@@ -307,6 +307,40 @@ jobs:
           rm -rf build/steamios-clean-derived
           xcodebuild             -project app/Madeira.xcodeproj             -scheme Madeira             -configuration Debug             -sdk iphoneos             -destination 'generic/platform=iOS'             -derivedDataPath build/steamios-clean-derived             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             build | tee build/steamios-clean-xcodebuild.log
 
+      - name: Ad-hoc sign SteamIOS with sideload entitlements
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find build/steamios-clean-derived/Build/Products/Debug-iphoneos -maxdepth 1 -type d -name 'SteamIOS.app' -print -quit)"
+          test -n "$APP"
+          test -s app/Madeira/Madeira.entitlements
+
+          # Preserve the entitlement request in the IPA itself. SideStore and
+          # other sideloaders will replace this ad-hoc signature with the user's
+          # signing identity, but can now inspect/preserve the requested flags.
+          if [ -d "$APP/Frameworks" ]; then
+            find "$APP/Frameworks" -type d -name '*.framework' -print0 | while IFS= read -r -d '' item; do
+              /usr/bin/codesign --force --sign - --timestamp=none "$item"
+            done
+            find "$APP/Frameworks" -type f -name '*.dylib' -print0 | while IFS= read -r -d '' item; do
+              /usr/bin/codesign --force --sign - --timestamp=none "$item"
+            done
+          fi
+          if [ -d "$APP/PlugIns" ]; then
+            find "$APP/PlugIns" -type d -name '*.appex' -print0 | while IFS= read -r -d '' item; do
+              /usr/bin/codesign --force --sign - --timestamp=none "$item"
+            done
+          fi
+
+          /usr/bin/codesign --force --sign - --timestamp=none \
+            --entitlements app/Madeira/Madeira.entitlements "$APP"
+
+          /usr/bin/codesign -d --entitlements :- "$APP" > /tmp/steamios-entitlements.plist 2>/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.increased-memory-limit' /tmp/steamios-entitlements.plist | grep -qx true
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.allow-jit' /tmp/steamios-entitlements.plist | grep -qx true
+          /usr/libexec/PlistBuddy -c 'Print :get-task-allow' /tmp/steamios-entitlements.plist | grep -qx true
+          echo "STEAMIOS_ADHOC_ENTITLEMENTS_OK"
+
       - name: Package and audit IPA
         shell: bash
         run: |
@@ -333,8 +367,30 @@ jobs:
           ipa_bytes="$(stat -f%z artifacts/SteamIOS.ipa)"
           printf 'app_bytes=%s\nipa_bytes=%s\n' "$app_bytes" "$ipa_bytes" | tee artifacts/size.txt
           unzip -tq artifacts/SteamIOS.ipa
-          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/SteamIOS\.app/Info\.plist$'
-          echo "STEAMIOS_IPA_OK app_bytes=$app_bytes ipa_bytes=$ipa_bytes"
+          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/SteamIOS\.app/Info\.plist
+
+      - name: Cache statistics
+        if: always()
+        shell: bash
+        run: |
+          ccache --show-stats || true
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-upstream-clean-unsigned
+          path: |
+            artifacts/SteamIOS.ipa
+            artifacts/SteamIOS.ipa.sha256
+            artifacts/SteamIOS.entitlements.plist
+            artifacts/size.txt
+            build/steamios-clean-xcodebuild.log
+          if-no-files-found: error
+          compression-level: 0
+
+          /usr/bin/codesign -d --entitlements :- "$APP" > artifacts/SteamIOS.entitlements.plist 2>/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.increased-memory-limit' artifacts/SteamIOS.entitlements.plist | grep -qx true
+          echo "STEAMIOS_IPA_OK app_bytes=$app_bytes ipa_bytes=$ipa_bytes memory_plus=embedded"
 
       - name: Cache statistics
         if: always()
