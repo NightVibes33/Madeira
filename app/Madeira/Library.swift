@@ -1988,6 +1988,76 @@ struct LibraryBadges: View {
     }
 }
 
+struct MemoryPlusSettingsSection: View {
+    @State private var enabled = EntitlementStatus.check().increasedMemory
+
+    var body: some View {
+        Section("Memory+") {
+            LabeledContent("Increased Memory Limit") {
+                Label(enabled ? "Enabled" : "Not enabled",
+                      systemImage: enabled ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(enabled ? Color.green : Color.red)
+            }
+
+            Text("SteamIOS requests the increased-memory-limit entitlement in its IPA. The sideload signature still has to grant it; this status checks the entitlement on the installed app.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if !enabled {
+                Link(destination: URL(string: "https://github.com/NexSideloading/iRAM-Plus/releases/latest")!) {
+                    Label("Get iRAM+ for Memory+", systemImage: "arrow.down.circle")
+                }
+
+                Text("Use iRAM+ to add Increased Memory Limit to SteamIOS, then reinstall or re-sign the same SteamIOS IPA. Reopen SteamIOS and this badge should turn green.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { enabled = EntitlementStatus.check().increasedMemory }
+    }
+}
+
+struct ExternalStorageSettingsSection: View {
+    @ObservedObject private var storage = ExternalSteamDrive.shared
+
+    var body: some View {
+        Section("External storage") {
+            LabeledContent("Steam library") {
+                if storage.isMounted {
+                    Label(storage.displayName ?? "External drive", systemImage: "externaldrive.fill")
+                        .foregroundStyle(.green)
+                } else if storage.isConfigured {
+                    Label(storage.displayName ?? "Unavailable", systemImage: "externaldrive.badge.exclamationmark")
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("Internal only").foregroundStyle(.secondary)
+                }
+            }
+
+            Button {
+                storage.chooseDirectory()
+            } label: {
+                Label(storage.isConfigured ? "Choose another drive or folder" : "Choose USB drive or folder",
+                      systemImage: "externaldrive")
+            }
+
+            if storage.isConfigured {
+                Button("Use internal storage only", role: .destructive) {
+                    storage.clearSelection()
+                }
+            }
+
+            if let error = storage.lastError {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
+
+            Text("Pick a writable folder from Files, including a USB-C/OTG drive. SteamIOS creates a SteamLibrary folder, mounts it as E:\\ inside Wine, and adds it to Steam's libraryfolders.vdf so Steam can install and launch games there.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 /// JIT and Memory+ at the top of Settings, each with a green check or a red cross (the
 /// developer interface's badges), and "Ready to play" beside them once both are there.
 /// Checked every 2 s.
@@ -2235,6 +2305,12 @@ struct LibraryView: View {
             }
             if settingsShow("JIT", "StikDebug", "built-in", "pairing", "LocalDevVPN") {
                 JITSettingsSection()
+            }
+            if settingsShow("Memory+", "memory limit", "RAM", "iRAM+", "GetMoreRam") {
+                MemoryPlusSettingsSection()
+            }
+            if settingsShow("storage", "external", "USB", "drive", "OTG", "Files") {
+                ExternalStorageSettingsSection()
             }
             if settingsShow("diagnostics", "extended logging", "logging", "log") {
                 Section {
