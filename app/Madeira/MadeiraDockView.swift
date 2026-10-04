@@ -133,6 +133,11 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
         LogStore.shared.log("[external-drive] selection cleared")
     }
 
+    @discardableResult
+    func mountIfConfigured(prefixURL: URL, steamDirectory: URL, steamWindowsPath: String) -> Bool {
+        installSteamApps(prefixURL: prefixURL) != nil
+    }
+
     /// Returns the external SteamApps folder through the fixed C: mount used
     /// by the launcher. The bookmark is restored automatically after relaunch.
     func installSteamApps(prefixURL: URL = MadeiraDock.prefix) -> URL? {
