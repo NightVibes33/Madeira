@@ -38,7 +38,7 @@ enum SteamRuntimeFiles {
             case .invalidPackage: return "Steam's components could not be verified. Try downloading them again."
             case .conflict: return "Existing Steam files need attention. They were kept. Use the desktop setup option."
             case .activeSession: return "Close the running session before preparing Steam's components."
-            case .prefixMissing: return "Madeira could not prepare its Windows environment."
+            case .prefixMissing: return "SteamIOS could not prepare its Windows environment."
             }
         }
     }
