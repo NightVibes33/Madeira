@@ -25,7 +25,7 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CLEAN_REF: steamios-upstream-clean
-      # Rebuild clean branch native runtime with complete COM/DWrite generated headers.
+      # Rebuild clean branch native runtime with complete COM/DWrite/DirectShow generated headers.
       # Clean branch generates the native Wine/WIDL prerequisites from pinned sources.
       # Clean branch carries the macOS/iOS FEX processor/tuning and host-boundary build fixes.
       # Clean branch also bootstraps the generated wineserver base archive.
