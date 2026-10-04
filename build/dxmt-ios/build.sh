@@ -79,7 +79,9 @@ compile_cxx() {
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
-        echo "FAILED"; FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
+        echo "FAILED"
+        cat "$OBJ_DIR/$name.err"
+        FAILED=$((FAILED+1)); FAILED_FILES="$FAILED_FILES $name"
     fi
 }
 
