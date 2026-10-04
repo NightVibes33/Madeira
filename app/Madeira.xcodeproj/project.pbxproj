@@ -55,6 +55,7 @@
 		A1000519 /* SwiftSteam/Helpers/SteamLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000519 /* SteamLog.swift */; };
 		A1000001 /* MadeiraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* MadeiraApp.swift */; };
 		A1000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* ContentView.swift */; };
+		A1000E00 /* ExternalSteamDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000E00 /* ExternalSteamDrive.swift */; };
 		A1000003 /* LogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* LogStore.swift */; };
 		A1000077 /* MadeiraConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000077 /* MadeiraConfig.swift */; };
 		A1000004 /* JITAllocator.c in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* JITAllocator.c */; };
@@ -222,6 +223,7 @@
 		A2000519 /* SteamLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftSteam/Helpers/SteamLog.swift"; sourceTree = "<group>"; };
 		A2000001 /* MadeiraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MadeiraApp.swift; sourceTree = "<group>"; };
 		A2000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A2000E00 /* ExternalSteamDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalSteamDrive.swift; sourceTree = "<group>"; };
 		A2000003 /* LogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogStore.swift; sourceTree = "<group>"; };
 		A2000077 /* MadeiraConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MadeiraConfig.swift; sourceTree = "<group>"; };
 		A2000004 /* JITAllocator.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = JITAllocator.c; sourceTree = "<group>"; };
@@ -439,6 +441,7 @@
 				A2000243 /* GamepadInput.swift */,
 				A2000260 /* PadKeyboardMouse.swift */,
 				A2000002 /* ContentView.swift */,
+				A2000E00 /* ExternalSteamDrive.swift */,
 				A2000003 /* LogStore.swift */,
 				A2000077 /* MadeiraConfig.swift */,
 				A2000200 /* LogPattern.swift */,
@@ -743,6 +746,7 @@
 				A1000243 /* GamepadInput.swift in Sources */,
 				A1000260 /* PadKeyboardMouse.swift in Sources */,
 				A1000002 /* ContentView.swift in Sources */,
+				A1000E00 /* ExternalSteamDrive.swift in Sources */,
 				A1000003 /* LogStore.swift in Sources */,
 				A1000077 /* MadeiraConfig.swift in Sources */,
 				A1000200 /* LogPattern.swift in Sources */,
