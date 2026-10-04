@@ -36,7 +36,7 @@ compile_one() {
         -DWINE_UNIX_LIB -DWINE_IOS=1 \
         -Dget_thread_context=ntdll_get_thread_context \
         -Dset_thread_context=ntdll_set_thread_context \
-        -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
+        -c "$src" -o "$OBJ_DIR/$name.o" >"$OBJ_DIR/$name.err" 2>&1; then
         echo "OK"
         SUCCEEDED=$((SUCCEEDED + 1))
     else
@@ -72,7 +72,7 @@ compile_unixlib() {
         -D__wine_unix_call_funcs=${prefix}_unix_call_funcs \
         -D__wine_unix_call_wow64_funcs=${prefix}_unix_call_wow64_funcs \
         "$@" \
-        -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
+        -c "$src" -o "$OBJ_DIR/$name.o" >"$OBJ_DIR/$name.err" 2>&1; then
         echo "OK"
         SUCCEEDED=$((SUCCEEDED + 1))
     else
@@ -102,12 +102,13 @@ ARM64EC_BUILD="$WINE_SRC/build-arm64ec"
 if [ ! -s "$WINE_BUILD/include/mfobjects.h" ] || [ ! -s "$WINE_BUILD/include/mftransform.h" ]; then
     python3 "$IDL_GEN" "$WINE_SRC" "$WINE_BUILD" mfobjects.idl mftransform.idl
 fi
-if [ ! -s "$ARM64EC_BUILD/include/dwrite_3.h" ]; then
-    python3 "$IDL_GEN" "$WINE_SRC" "$ARM64EC_BUILD" dwrite_3.idl
+if [ ! -s "$ARM64EC_BUILD/include/dwrite_3.h" ] || [ ! -s "$ARM64EC_BUILD/include/d2d1.h" ]; then
+    python3 "$IDL_GEN" "$WINE_SRC" "$ARM64EC_BUILD" dwrite_3.idl d2d1.idl
 fi
 test -s "$WINE_BUILD/include/mfobjects.h"
 test -s "$WINE_BUILD/include/mftransform.h"
 test -s "$ARM64EC_BUILD/include/dwrite_3.h"
+test -s "$ARM64EC_BUILD/include/d2d1.h"
 echo "STEAMIOS_WINE_IDL_HEADERS_READY"
 
 "$CRYPTO_DIR/gen_gnutls_symtab.sh" > /dev/null
