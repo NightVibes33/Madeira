@@ -280,6 +280,7 @@ jobs:
           set -euo pipefail
           test -s FEX/build-ios/FEXCore/Source/libFEXCore.a
           test -s FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
+          test -s FEX/build-ios/FEXCore/Source/libJemallocLibs.a
           test -s app/Madeira/libwineserver.a
           test -s app/Madeira/libntdll_unix.a
           test -s app/Madeira/libwin32u_unix.a
