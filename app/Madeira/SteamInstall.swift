@@ -16,16 +16,35 @@ import Foundation
 // once its record says so, and the record is written last.
 
 enum SteamInstallPaths {
-    /// The library folder, relative to drive_c (the value `DockGame.library` has).
+    /// Library folders relative to drive_c (the value `DockGame.library` has).
     static let libraryRelative = "Program Files (x86)/Steam/steamapps"
+    static let externalLibraryRelative = "SteamIOSExternal/steamapps"
 
-    static func steamApps(drive: URL) -> URL { drive.appendingPathComponent(libraryRelative, isDirectory: true) }
-    static func common(drive: URL) -> URL { steamApps(drive: drive).appendingPathComponent("common", isDirectory: true) }
+    static func steamApps(drive: URL) -> URL {
+        steamApps(drive: drive, library: libraryRelative)
+    }
 
-    /// Whether an install (its drive-relative library folder) is in the library
-    /// Madeira downloads into, and so can be updated or removed here.
+    static func steamApps(drive: URL, library: String) -> URL {
+        drive.appendingPathComponent(library, isDirectory: true)
+    }
+
+    static func common(drive: URL) -> URL {
+        steamApps(drive: drive).appendingPathComponent("common", isDirectory: true)
+    }
+
+    static func common(drive: URL, library: String) -> URL {
+        steamApps(drive: drive, library: library).appendingPathComponent("common", isDirectory: true)
+    }
+
+    /// Whether an install is owned by SteamIOS's internal or security-scoped
+    /// external Steam library, and so can be updated, repaired or removed here.
     static func isManaged(library: String) -> Bool {
-        library.caseInsensitiveCompare(libraryRelative) == .orderedSame
+        library.caseInsensitiveCompare(libraryRelative) == .orderedSame ||
+        library.caseInsensitiveCompare(externalLibraryRelative) == .orderedSame
+    }
+
+    static func isExternal(library: String) -> Bool {
+        library.caseInsensitiveCompare(externalLibraryRelative) == .orderedSame
     }
 }
 
