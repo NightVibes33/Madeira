@@ -2024,10 +2024,10 @@ struct ExternalStorageSettingsSection: View {
         Section("External storage") {
             LabeledContent("Steam library") {
                 if storage.isMounted {
-                    Label(storage.displayName ?? "External drive", systemImage: "externaldrive.fill")
+                    Label(storage.displayName, systemImage: "externaldrive.fill")
                         .foregroundStyle(.green)
                 } else if storage.isConfigured {
-                    Label(storage.displayName ?? "Unavailable", systemImage: "externaldrive.badge.exclamationmark")
+                    Label(storage.displayName, systemImage: "externaldrive.badge.exclamationmark")
                         .foregroundStyle(.orange)
                 } else {
                     Text("Internal only").foregroundStyle(.secondary)
