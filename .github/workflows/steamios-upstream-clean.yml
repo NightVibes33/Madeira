@@ -91,6 +91,63 @@ jobs:
           test "$(git config -f .gitmodules submodule.madeira-dock.url)" = "https://github.com/willfaust/madeira-dock.git"
           echo "STEAMIOS_UPSTREAM_SUBMODULES_READY"
 
+      - name: Restore compiler cache
+        id: ccache-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: steamios-clean-ccache-v3-${{ runner.os }}-${{ env.UPSTREAM_BASE }}-${{ hashFiles('build/**/*.sh', 'tools/patches/**') }}
+          restore-keys: |
+            steamios-clean-ccache-v3-${{ runner.os }}-${{ env.UPSTREAM_BASE }}-
+            steamios-clean-ccache-v3-${{ runner.os }}-
+
+      - name: Restore native runtime cache
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            FEX/build-ios
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+            app/Madeira/libdxmt_combined.a
+            app/Madeira/libmadeira_rppairing.a
+            app/Madeira/libavformat.a
+            app/Madeira/libavcodec.a
+            app/Madeira/libswresample.a
+            app/Madeira/libavutil.a
+            app/Madeira/i386-windows
+            app/Madeira/arm64ec-windows/dockhost.exe
+          key: steamios-clean-native-v3-${{ runner.os }}-${{ env.UPSTREAM_BASE }}-${{ hashFiles('build/**/*.sh', 'tools/patches/**', '.gitmodules') }}
+
+      - name: Validate native runtime cache
+        id: native-check
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=true
+          for f in \
+            FEX/build-ios/FEXCore/Source/libFEXCore.a \
+            FEX/build-ios/FEXCore/Source/libFEXCore_Base.a \
+            FEX/build-ios/FEXCore/Source/libJemallocLibs.a \
+            app/Madeira/libwineserver.a \
+            app/Madeira/libntdll_unix.a \
+            app/Madeira/libwin32u_unix.a \
+            app/Madeira/libdxmt_combined.a \
+            app/Madeira/libmadeira_rppairing.a \
+            app/Madeira/libavformat.a \
+            app/Madeira/libavcodec.a \
+            app/Madeira/libswresample.a \
+            app/Madeira/libavutil.a \
+            app/Madeira/i386-windows/kernel32.dll \
+            app/Madeira/i386-windows/d3d11.dll \
+            app/Madeira/arm64ec-windows/dockhost.exe
+          do
+            test -s "$f" || ready=false
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "STEAMIOS_NATIVE_CACHE_READY=$ready"
+
       - name: Verify untouched upstream runtime payload
         shell: bash
         run: |
@@ -222,6 +279,7 @@ jobs:
           key: steamios-clean-llvm-v1-${{ env.LLVM_PIN }}
 
       - name: Configure current Wine build trees
+        if: steps.native-check.outputs.ready != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -240,6 +298,7 @@ jobs:
           echo "STEAMIOS_WINE_CONFIGURED"
 
       - name: Build only upstream-untracked native dependencies
+        if: steps.native-check.outputs.ready != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -267,12 +326,32 @@ jobs:
           echo "STEAMIOS_NATIVE_RUNTIME_BUILT"
 
       - name: Build i386 Wine/DXMT farm
+        if: steps.native-check.outputs.ready != 'true'
         shell: bash
         run: |
           set -euo pipefail
           export PATH="/opt/homebrew/opt/bison/bin:$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
           bash build/wine-i386/build.sh
           echo "STEAMIOS_I386_READY"
+
+      - name: Save native runtime cache
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            FEX/build-ios
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+            app/Madeira/libdxmt_combined.a
+            app/Madeira/libmadeira_rppairing.a
+            app/Madeira/libavformat.a
+            app/Madeira/libavcodec.a
+            app/Madeira/libswresample.a
+            app/Madeira/libavutil.a
+            app/Madeira/i386-windows
+            app/Madeira/arm64ec-windows/dockhost.exe
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
 
       - name: Verify runtime inputs
         shell: bash
@@ -300,11 +379,20 @@ jobs:
           set -euo pipefail
           bash build/stage-licenses.sh
 
+      - name: Restore Xcode DerivedData cache
+        id: derived-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/steamios-clean-derived
+          key: steamios-clean-derived-v2-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            steamios-clean-derived-v2-${{ runner.os }}-
+
       - name: Build unsigned Debug iPhoneOS app
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf build/steamios-clean-derived
+          mkdir -p build/steamios-clean-derived
           xcodebuild \
             -project app/Madeira.xcodeproj \
             -scheme Madeira \
@@ -315,6 +403,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build | tee build/steamios-clean-xcodebuild.log
+
+      - name: Save Xcode DerivedData cache
+        if: steps.derived-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/steamios-clean-derived
+          key: ${{ steps.derived-cache.outputs.cache-primary-key }}
 
       - name: Ad-hoc sign SteamIOS with sideload entitlements
         shell: bash
@@ -381,6 +476,13 @@ jobs:
           /usr/bin/codesign -d --entitlements :- "$APP" > artifacts/SteamIOS.entitlements.plist 2>/dev/null
           /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.increased-memory-limit' artifacts/SteamIOS.entitlements.plist | grep -qx true
           echo "STEAMIOS_IPA_OK app_bytes=$app_bytes ipa_bytes=$ipa_bytes memory_plus=embedded"
+
+      - name: Save compiler cache
+        if: steps.ccache-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.ccache-cache.outputs.cache-primary-key }}
 
       - name: Cache statistics
         if: always()
