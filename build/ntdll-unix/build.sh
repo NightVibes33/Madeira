@@ -99,8 +99,8 @@ echo "=== Building crypto/network unixlibs ==="
 # so materialize their complete import closure before compiling the unixlibs.
 IDL_GEN="$REPO_ROOT/tools/runtime-deps/build-wine-idl-headers.py"
 ARM64EC_BUILD="$WINE_SRC/build-arm64ec"
-if [ ! -s "$WINE_BUILD/include/objidlbase.h" ] || [ ! -s "$WINE_BUILD/include/mfobjects.h" ] || [ ! -s "$WINE_BUILD/include/mftransform.h" ]; then
-    python3 "$IDL_GEN" "$WINE_SRC" "$WINE_BUILD" objidlbase.idl objidl.idl mfobjects.idl mftransform.idl
+if [ ! -s "$WINE_BUILD/include/objidlbase.h" ] || [ ! -s "$WINE_BUILD/include/mfobjects.h" ] || [ ! -s "$WINE_BUILD/include/mftransform.h" ] || [ ! -s "$WINE_BUILD/include/strmif.h" ] || [ ! -s "$WINE_BUILD/include/amvideo.h" ] || [ ! -s "$WINE_BUILD/include/control.h" ]; then
+    python3 "$IDL_GEN" "$WINE_SRC" "$WINE_BUILD" objidlbase.idl objidl.idl mfobjects.idl mftransform.idl strmif.idl amvideo.idl control.idl
 fi
 if [ ! -s "$ARM64EC_BUILD/include/objidlbase.h" ] || [ ! -s "$ARM64EC_BUILD/include/dwrite_3.h" ] || [ ! -s "$ARM64EC_BUILD/include/d2d1.h" ]; then
     python3 "$IDL_GEN" "$WINE_SRC" "$ARM64EC_BUILD" objidlbase.idl objidl.idl dwrite_3.idl d2d1.idl
@@ -108,6 +108,9 @@ fi
 test -s "$WINE_BUILD/include/objidlbase.h"
 test -s "$WINE_BUILD/include/mfobjects.h"
 test -s "$WINE_BUILD/include/mftransform.h"
+test -s "$WINE_BUILD/include/strmif.h"
+test -s "$WINE_BUILD/include/amvideo.h"
+test -s "$WINE_BUILD/include/control.h"
 test -s "$ARM64EC_BUILD/include/objidlbase.h"
 test -s "$ARM64EC_BUILD/include/dwrite_3.h"
 test -s "$ARM64EC_BUILD/include/d2d1.h"
