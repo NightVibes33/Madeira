@@ -1239,9 +1239,9 @@ struct ContentView: View {
             .toolbarBackground(library.enabled && !Self.systemScrollEdge ? .visible : .automatic, for: .navigationBar)
             .navigationBarHidden(library.enabled ? library.current != nil : vSizeClass == .compact)
             // A second session cannot start in this process; offer to close Madeira.
-            .alert("Restart Madeira", isPresented: Binding(get: { library.restartNotice != nil },
+            .alert("Restart SteamIOS", isPresented: Binding(get: { library.restartNotice != nil },
                                                             set: { if !$0 { library.restartNotice = nil } })) {
-                Button("Close Madeira") {
+                Button("Close SteamIOS") {
                     LogStore.shared.log("[session-once] closed by the user for a restart")
                     exit(0)
                 }
@@ -1576,7 +1576,7 @@ struct ContentView: View {
                         .buttonStyle(.bordered)
                 }
                 if MadeiraDock.enabled {
-                    Button("Madeira Dock") { devSheet = .dock }
+                    Button("Steam Client") { devSheet = .dock }
                         .buttonStyle(.bordered)
                 }
                 Button("All settings") { devSheet = .allSettings }
@@ -2046,10 +2046,10 @@ struct ContentView: View {
             }
             .padding()
         }
-        .alert("Restart Madeira", isPresented: $showFrontendRestart) {
+        .alert("Restart SteamIOS", isPresented: $showFrontendRestart) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Close Madeira from the app switcher and open it again to use the new interface.")
+            Text("Close SteamIOS from the app switcher and open it again to use the new interface.")
         }
         // One sheet for the strip, not one per button: a sheet attached to a
         // button closed again whenever this often-redrawn screen rebuilt it.
@@ -2319,7 +2319,7 @@ struct ContentView: View {
         }
         if StikJITHelper.flaggedWithoutDebugger {
             logStore.log("[jit-debugger] launch held: CS_DEBUGGED is set but no debugger is attached; "
-                         + "JIT has to be enabled again from Madeira", level: .error)
+                         + "JIT has to be enabled again from SteamIOS", level: .error)
             if inLibrary { library.jitNotice = StikJITHelper.noDebuggerMessage }
         } else {
             logStore.log("JIT not enabled. Press 'Enable JIT' first.", level: .error)
@@ -2350,7 +2350,7 @@ struct ContentView: View {
                          message: "\(name)'s saves are still being checked or downloaded. Starting now may leave you on older saves.")
         case .unchecked(let why):
             return .init(appID: appID, kind: .unchecked, title: "Steam Cloud could not be checked",
-                         message: "Madeira does not know whether \(name)'s saves on this device are the latest."
+                         message: "SteamIOS does not know whether \(name)'s saves on this device are the latest."
                             + (why.map { " (\($0))" } ?? "") + " If another device has newer saves, starting now means choosing between them later.")
         case .conflict(let count):
             return .init(appID: appID, kind: .conflict, title: "Saves differ from Steam Cloud",
@@ -3134,7 +3134,7 @@ struct ContentView: View {
                                 then: { startDock(game, compactPool: compactPool, profile: profile) }) else { return }
         guard cloudClear(game.id, name: game.name, retry: { startDock(game, compactPool: compactPool, profile: profile) }) else { return }
         guard wine_process_is_running() == 0, wineserver_is_running() == 0, !inLibrary || library.current == nil else {
-            logStore.log("[madeira-dock] a session already ran in this app run; restart Madeira first", level: .error)
+            logStore.log("[madeira-dock] a session already ran in this app run; restart SteamIOS first", level: .error)
             if inLibrary { library.error = "A session is already running." }
             return
         }
@@ -3153,7 +3153,7 @@ struct ContentView: View {
         do {
             try MadeiraDock.validate(game, drive: MadeiraDock.drive)
             try profile?.validate()
-            guard SteamSignIn.isSignedIn else { throw DockError.message("Sign in to Steam in Madeira before starting Dock.") }
+            guard SteamSignIn.isSignedIn else { throw DockError.message("Sign in to Steam in SteamIOS before starting.") }
         } catch { fail(error); return }
         // Only one sign-in of the account may be online: the app's own Steam connection
         // (library, playtime, downloads) logs off and its socket closes before the sign-in
@@ -3168,7 +3168,7 @@ struct ContentView: View {
                     throw DockError.message("The launch state changed. Enable JIT and try again.")
                 }
                 guard let signIn = SteamSignIn.credentialsForDock() else {
-                    throw DockError.message("Sign in to Steam in Madeira before starting Dock.")
+                    throw DockError.message("Sign in to Steam in SteamIOS before starting.")
                 }
                 try MadeiraDock.writeHandoff(account: signIn.accountName, token: signIn.refreshToken, appID: game.id)
             } catch { fail(error); return }
@@ -3262,7 +3262,7 @@ struct ContentView: View {
 
         let bat = """
         @echo off\r
-        rem Generated by Madeira (ml589) — do not hand-edit; rewritten every launch.\r
+        rem Generated by SteamIOS — do not hand-edit; rewritten every launch.\r
         start "" "C:\\windows\\system32\\services.exe"\r
         cd /d "\(winDir)"\r
         "\(winDir)\\steam.exe" -no-cef-sandbox -cef-disable-gpu -console -nocrashmonitor -cef-disable-features=SegmentationPlatform,OptimizationTargetPrediction,OptimizationHints\r
@@ -3382,7 +3382,7 @@ struct SetupGuideView: View {
                     guideRow(
                         icon: "cpu",
                         title: "JIT Compilation",
-                        detail: "Required for x86 code translation. On iOS 26, StikDebug must stay attached — assign the 'universal' or 'MeloNX' JIT script to Madeira in StikDebug."
+                        detail: "Required for x86 code translation. On iOS 26, StikDebug must stay attached — assign the 'universal' or 'MeloNX' JIT script to SteamIOS in StikDebug."
                     )
                     guideRow(
                         icon: "memorychip",
@@ -3397,15 +3397,15 @@ struct SetupGuideView: View {
                 }
 
                 Section("Setup Steps") {
-                    stepRow(number: 1, text: "Install Madeira via SideStore or Xcode")
-                    stepRow(number: 2, text: "Install GetMoreRam and run it to inject memory entitlements into your App ID")
-                    stepRow(number: 3, text: "Reinstall Madeira with the same IPA to apply injected entitlements")
-                    stepRow(number: 4, text: "In StikDebug, assign the 'universal' JIT script to Madeira and launch it")
-                    stepRow(number: 5, text: "Launch Madeira and tap 'Test JIT' to verify")
+                    stepRow(number: 1, text: "Install SteamIOS via SideStore or Xcode")
+                    stepRow(number: 2, text: "Install iRAM+ and apply Increased Memory Limit to SteamIOS")
+                    stepRow(number: 3, text: "Reinstall SteamIOS with the same IPA to apply the entitlement")
+                    stepRow(number: 4, text: "In StikDebug, assign the 'universal' JIT script to SteamIOS and launch it")
+                    stepRow(number: 5, text: "Launch SteamIOS and tap 'Test JIT' to verify")
                 }
 
                 Section("About") {
-                    Text("Madeira is a proof-of-concept for running x86 Windows games on iOS using FEX-Emu, Wine, and Metal-based graphics translation.")
+                    Text("SteamIOS runs x86 Windows games on iOS using the upstream Madeira runtime, FEX-Emu, Wine, and Metal graphics translation.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
