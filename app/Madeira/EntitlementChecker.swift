@@ -73,8 +73,8 @@ struct SigningStatus {
         let known = jit_cs_status(&flags)
         return SigningStatus(known: known, flags: flags)
     }
-    static let notDebuggableMessage = "JIT cannot be enabled on this copy of Madeira: it was signed without get-task-allow "
-        + "(a distribution or enterprise certificate), so no debugger can attach to it. Install Madeira with a development "
+    static let notDebuggableMessage = "JIT cannot be enabled on this copy of SteamIOS: it was signed without get-task-allow "
+        + "(a distribution or enterprise certificate), so no debugger can attach to it. Install SteamIOS with a development "
         + "certificate (for example SideStore, AltStore or Xcode), then enable JIT again."
 }
 
@@ -160,7 +160,7 @@ enum DeviceDiagnostics {
         }
         if StikJITHelper.flaggedWithoutDebugger {
             log.log("[jit-debugger] CS_DEBUGGED is set but no debugger is attached at start-up: JIT was enabled "
-                + "outside Madeira (StikDebug's app list attaches and leaves). Enable JIT in Madeira before playing.",
+                + "outside SteamIOS (StikDebug's app list attaches and leaves). Enable JIT in SteamIOS before playing.",
                 level: .error)
         }
         let screen = UIScreen.main
