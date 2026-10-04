@@ -309,6 +309,13 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
             try? fm.removeItem(at: driveLink)
             try fm.createSymbolicLink(at: driveLink, withDestinationURL: library)
 
+            // Keep Valve's client and MadeiraDock discovery pointed at the same
+            // external library even when Steam.exe itself is not installed.
+            try updateLibraryFolders(
+                steamDirectory: MadeiraDock.clientRoot,
+                internalWindowsPath: SteamRuntimeFiles.windowsRoot
+            )
+
             isMounted = true
             lastError = nil
             return externalMount.appendingPathComponent("steamapps", isDirectory: true)
