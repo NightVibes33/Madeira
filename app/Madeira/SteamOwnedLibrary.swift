@@ -1105,7 +1105,11 @@ final class SteamOwnedLibrary: ObservableObject {
             }
             let location = installLocation(appID)
             guard let targetApps = steamApps(for: appID) else {
-                throw SteamError.insufficientDiskSpace
+                throw NSError(
+                    domain: "SteamIOS.ExternalStorage",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "The selected external drive is not available. Reconnect it or choose iPhone / iPad storage."]
+                )
             }
             try FileManager.default.createDirectory(
                 at: targetApps.appendingPathComponent("common", isDirectory: true),
