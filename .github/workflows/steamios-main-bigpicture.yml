@@ -138,6 +138,20 @@ jobs:
           restore-keys: |
             steamios-main-i386-v1-
 
+      - name: Detect restored i386 runtime
+        id: i386-ready
+        shell: bash
+        run: |
+          if [[ -s app/Madeira/i386-windows/kernel32.dll &&
+                -s app/Madeira/i386-windows/ntdll.dll &&
+                -s app/Madeira/i386-windows/dxgi.dll &&
+                -s app/Madeira/i386-windows/d3d11.dll ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "STEAMIOS_I386_CACHE_READY"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Restore durable native runtime cache
         id: native-runtime-cache
         uses: actions/cache/restore@v4
@@ -266,7 +280,7 @@ jobs:
           echo "STEAMIOS_WINDOWLESS_LAUNCHER_READY"
 
       - name: Build i386 Wine/DXMT farm
-        if: steps.durable-i386-cache.outputs.cache-hit != 'true'
+        if: steps.i386-ready.outputs.ready != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -286,7 +300,7 @@ jobs:
           echo "STEAMIOS_I386_FARM_READY"
 
       - name: Save durable i386 Wine/DXMT cache
-        if: steps.durable-i386-cache.outputs.cache-hit != 'true'
+        if: steps.i386-ready.outputs.ready != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
