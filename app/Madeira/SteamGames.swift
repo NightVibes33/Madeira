@@ -696,6 +696,7 @@ private struct SteamGameCell: View {
     var dense = false
     @ObservedObject private var steam = SteamOwnedLibrary.shared
     @ObservedObject private var games = SteamGamesModel.shared
+    @ObservedObject private var storage = ExternalSteamDrive.shared
     @ObservedObject private var library = LibraryModel.shared
 
     var body: some View {
@@ -861,6 +862,7 @@ struct SteamGameSheet: View {
     @State private var freeSpace: Int64?
     @State private var partial = false
     @State private var confirmCancel = false
+    @State private var installLocation: SteamInstallLocation = .internalStorage
 
     var body: some View {
         let owned = SteamOwnedLibrary.enabled ? steam.owned : []
@@ -886,6 +888,35 @@ struct SteamGameSheet: View {
                                     .clipped()
                             )
                     }
+                    if item.installed == nil && steam.downloads[appID] == nil {
+                        Section("Install location") {
+                            Picker("Install to", selection: $installLocation) {
+                                Text("iPhone / iPad storage").tag(SteamInstallLocation.internalStorage)
+                                if storage.isMounted {
+                                    Text(storage.installLabel).tag(SteamInstallLocation.external)
+                                }
+                            }
+                            .pickerStyle(.inline)
+
+                            if !storage.isMounted {
+                                Button {
+                                    storage.chooseDirectory()
+                                } label: {
+                                    Label("Choose USB / external drive", systemImage: "externaldrive")
+                                }
+                                Text("The Files picker will show connected USB-C/OTG drives and other writable locations. After you choose one, SteamIOS installs the game there instead of filling this device's storage.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Label("External library ready: \(storage.installLabel)", systemImage: "externaldrive.fill")
+                                    .foregroundStyle(.green)
+                                Text("External installs stay on the selected drive and are mounted at C:\\SteamIOSExternal inside Wine.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     if let download = steam.downloads[appID] {
                         Section("Download") {
                             SteamDownloadStatus(download: download)
@@ -915,8 +946,19 @@ struct SteamGameSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task(id: steam.downloads[appID]?.state) {
                 partial = steam.hasPartialDownload(appID)
+                installLocation = steam.selectedInstallLocation(appID)
+                if !partial && steam.downloads[appID] == nil && storage.isMounted {
+                    installLocation = .external
+                }
                 let values = try? URL.documentsDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 freeSpace = values?.volumeAvailableCapacityForImportantUsage
+            }
+            .onChange(of: storage.isMounted) { _, mounted in
+                if mounted && steam.downloads[appID] == nil && !partial {
+                    installLocation = .external
+                } else if !mounted && installLocation == .external {
+                    installLocation = .internalStorage
+                }
             }
             .confirmationDialog("Cancel this download? Downloaded files are deleted.", isPresented: $confirmCancel, titleVisibility: .visible) {
                 Button("Cancel download", role: .destructive) {
@@ -927,7 +969,7 @@ struct SteamGameSheet: View {
         }
     }
 
-    static let downloadNote = "Games download directly from Steam with your account into C:\\Program Files (x86)\\Steam\\steamapps\\common. You can leave Madeira while it downloads: on iOS 26 and later iOS shows the download's progress and keeps it going; on earlier versions it pauses after a short while and continues when you return. A download pauses while a game is running and continues afterwards."
+    static let downloadNote = "Games download directly from Steam with your account. New installs can use this device or a selected USB/external drive. You can leave SteamIOS while it downloads: on iOS 26 and later iOS shows the download's progress and keeps it going; on earlier versions it pauses after a short while and continues when you return. A download pauses while a game is running and continues afterwards."
 
     @ViewBuilder private func primaryAction(_ item: SteamGamesRules.Item) -> some View {
         if let installed = item.installed {
@@ -951,9 +993,9 @@ struct SteamGameSheet: View {
                     .buttonStyle(.borderedProminent)
             }
         } else if item.owned != nil {
-            Button { steam.install(appID) } label: {
+            Button { steam.install(appID, location: installLocation) } label: {
                 steamActionLabel(partial ? "Resume download" : "Install", symbol: "arrow.down.circle.fill")
-            }.buttonStyle(.borderedProminent).disabled(!steam.signedIn)
+            }.buttonStyle(.borderedProminent).disabled(!steam.signedIn || (installLocation == .external && !storage.isMounted))
         }
     }
 }
