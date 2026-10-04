@@ -3248,7 +3248,7 @@ struct ContentView: View {
             ("C:\\Program Files\\Steam",       "\(prefix)/drive_c/Program Files/Steam"),
         ]
 
-        guard let (winDir, _) = candidates.first(where: {
+        guard let (winDir, unixDir) = candidates.first(where: {
             fm.fileExists(atPath: "\($0.1)/steam.exe")
         }) else {
             logStore.log("Steam is not installed in this prefix.", level: .error)
@@ -3275,6 +3275,16 @@ struct ContentView: View {
             logStore.log("Could not write steam-launch.bat: \(error.localizedDescription)", level: .error)
             return false
         }
+        let prefixURL = URL(fileURLWithPath: prefix, isDirectory: true)
+        let steamDirectoryURL = URL(fileURLWithPath: unixDir, isDirectory: true)
+        if ExternalSteamDrive.shared.mountIfConfigured(
+            prefixURL: prefixURL,
+            steamDirectory: steamDirectoryURL,
+            steamWindowsPath: winDir
+        ) {
+            logStore.log("External Steam library ready as E:\\\\", level: .success)
+        }
+
         logStore.log("Steam found at \(winDir)", level: .success)
         return true
     }
