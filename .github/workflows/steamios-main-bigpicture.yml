@@ -115,7 +115,7 @@ jobs:
             build/gnutls-ios/obj
             build/freetype-ios/build
             FEX/build-ios
-          key: steamios-main-native-fex-v1-${{ hashFiles('build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh', 'build/fex-ios/build.sh', 'tools/patches/apply-fex-ios-native-host.py') }}
+          key: steamios-main-native-fex-v1-${{ hashFiles('build/gnutls-ios/build.sh', 'build/freetype-ios/build.sh', 'build/fex-ios/build.sh', 'tools/patches/apply-fex-ios-apple-runtime.py') }}
 
       - name: Restore durable i386 Wine/DXMT cache
         id: durable-i386-cache
