@@ -2263,20 +2263,10 @@ struct ContentView: View {
     }
 
     private func enableJIT() {
-        // Explains why JIT cannot be enabled on a copy signed without get-task-allow; 0 opens StikDebug regardless.
-        // A debugger can attach only to a process whose signature carries
-        // get-task-allow (a development signature). A copy signed with a
-        // distribution or enterprise certificate lacks it, StikDebug can never
-        // attach, and CS_DEBUGGED never appears however often this is tapped.
-        if !SigningStatus.current.debuggable && false {
-            jitStatus = .unavailable
-            logStore.log(String(format: "[jit-signing] get-task-allow is missing (cs-flags=0x%x): no debugger can attach to this copy, "
-                                + "so JIT cannot be enabled. Reinstall Madeira with a development certificate.",
-                                SigningStatus.current.flags), level: .error)
-            if library.enabled { library.error = SigningStatus.notDebuggableMessage }
-            launchAfterJITEnded(started: false)
-            return
-        }
+        // SteamIOS deliberately uses its proven StikDebug/StikJIT URL bridge
+        // instead of upstream's development-certificate preflight. The actual
+        // readiness gate remains upstream's CS_DEBUGGED + live-debugger/pool
+        // check below, so a URL handoff alone is never treated as JIT success.
         jitStatus = .testing
         logStore.log("Requesting JIT with SteamIOS custom StikDebug bridge...")
 
@@ -2288,11 +2278,6 @@ struct ContentView: View {
                 launchAfterJITEnded(started: true)
             case .failure(let failure):
                 launchAfterJITEnded(started: false)
-                if let coordinatorError = failure as? JITCoordinator.CoordinatorError,
-                   case .setupRequired = coordinatorError {
-                    jitStatus = .unknown
-                    return
-                }
                 jitStatus = .unavailable
                 logStore.log("Failed to enable JIT: \(failure.localizedDescription)", level: .error)
                 if library.enabled { library.error = failure.localizedDescription }

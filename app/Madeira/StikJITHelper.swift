@@ -22,7 +22,7 @@ enum StikJITHelper {
             case .unavailable:
                 return "StikDebug/StikJIT is not installed or did not accept the SteamIOS JIT request."
             case .timedOut:
-                return "StikDebug did not attach to Madeira within 90 seconds. Check its pairing file and LocalDevVPN, then try again."
+                return "StikDebug did not attach to SteamIOS within 90 seconds. Check its pairing file and LocalDevVPN, then try again."
             }
         }
     }
@@ -34,16 +34,16 @@ enum StikJITHelper {
         return try? Data(contentsOf: url)
     }
 
-    /// Check whether StikDebug is installed. `stikdebug` is its canonical scheme;
-    /// the older `stikjit` alias remains declared for compatibility.
+    /// Check whether the SteamIOS StikDebug/StikJIT handoff is available.
+    /// SteamIOS keeps the proven `stikjit` URL contract used by its sideload builds.
     static var isAvailable: Bool {
         guard let url = URL(string: "stikjit://enable-jit") else { return false }
         return UIApplication.shared.canOpenURL(url)
     }
 
-    /// Open StikDebug with our JIT script embedded in the URL.
-    /// PID targets this running process rather than asking StikDebug to launch a
-    /// replacement instance by bundle ID.
+    /// Open the SteamIOS JIT handoff with this app's bundle ID and custom
+    /// debugger script embedded in the URL. The receiver resolves the live app
+    /// from the bundle ID; no upstream PID parameter is required by this path.
     static func enableJIT(completion: @escaping (Result<Void, Error>) -> Void) {
         guard let bundleID = Bundle.main.bundleIdentifier,
               let scriptData else {
@@ -63,11 +63,11 @@ enum StikJITHelper {
             return
         }
 
-        LogStore.shared.log("Opening StikDebug to enable JIT...")
+        LogStore.shared.log("Opening SteamIOS StikDebug/JIT bridge...")
 
         UIApplication.shared.open(url, options: [:]) { success in
             if !success {
-                LogStore.shared.log("Failed to open StikDebug. Is it installed?", level: .error)
+                LogStore.shared.log("Failed to open the SteamIOS StikDebug/JIT bridge.", level: .error)
                 completion(.failure(RequestError.unavailable))
                 return
             }
@@ -113,9 +113,8 @@ enum StikJITHelper {
     /// Why the last allocatePool() returned nil, in words for the person playing
     /// (the library shows it); nil after a success.
     private(set) static var poolFailure: String?
-    static let noDebuggerMessage = "JIT is switched on, but StikDebug is not attached to Madeira, so the JIT memory cannot "
-        + "be set up. This happens when JIT is enabled from StikDebug's own app list. Tap Enable JIT: StikDebug then "
-        + "reopens Madeira with Madeira's script, ready to play."
+    static let noDebuggerMessage = "JIT is switched on, but StikDebug is not attached to SteamIOS, so the JIT memory cannot "
+        + "be set up. Tap Enable JIT in SteamIOS so StikDebug receives SteamIOS's custom script and attaches to this run."
 
     /// This app run's pool exists. The debugger detaches right after the pool is
     /// made, by design, so from then on "no debugger attached" is the normal state.

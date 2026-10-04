@@ -279,6 +279,10 @@ final class MadeiraDockModel: ObservableObject {
                     await MainActor.run { self.progress = text }
                 }
                 SteamLog.event("[dock-setup] client components ready")
+                // If a USB/Files library was chosen before Steam's client existed,
+                // registration was intentionally deferred. Finish it now against the
+                // freshly-created Valve libraryfolders.vdf.
+                ExternalSteamDrive.shared.restoreAndMountIfAvailable()
             } catch {
                 self.error = error.localizedDescription
                 SteamLog.event("[dock-setup] client components failed")
