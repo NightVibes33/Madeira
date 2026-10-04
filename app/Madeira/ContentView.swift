@@ -1229,7 +1229,7 @@ struct ContentView: View {
             // this if/else (two SwiftUI identities) — HARMLESS since
             // 2026-07-05: MetalHostView is a process-lifetime singleton;
             // a fresh placeholder only re-parents the same CAMetalLayer.
-            .navigationTitle("Madeira")
+            .navigationTitle("SteamIOS")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.regularMaterial, for: .navigationBar)
             // The library keeps a material bar only before iOS 26. From iOS 26 the
@@ -1281,6 +1281,7 @@ struct ContentView: View {
             }
             .onAppear {
                 jit_install_trap_handler()
+                ExternalSteamDrive.shared.restoreAndMountIfAvailable()
                 entitlements = EntitlementStatus.check()
                 logEntitlementStatus()
                 logStore.log("[build] \(BuildStamp.text)")
@@ -2267,7 +2268,7 @@ struct ContentView: View {
         // get-task-allow (a development signature). A copy signed with a
         // distribution or enterprise certificate lacks it, StikDebug can never
         // attach, and CS_DEBUGGED never appears however often this is tapped.
-        if !SigningStatus.current.debuggable, MadeiraConfig.flag("MADEIRA_JIT_SIGNING_CHECK") {
+        if !SigningStatus.current.debuggable && false {
             jitStatus = .unavailable
             logStore.log(String(format: "[jit-signing] get-task-allow is missing (cs-flags=0x%x): no debugger can attach to this copy, "
                                 + "so JIT cannot be enabled. Reinstall Madeira with a development certificate.",
@@ -2277,9 +2278,9 @@ struct ContentView: View {
             return
         }
         jitStatus = .testing
-        logStore.log("Requesting JIT with \(jitCoordinator.resolvedMethod.title)...")
+        logStore.log("Requesting JIT with SteamIOS custom StikDebug bridge...")
 
-        jitCoordinator.enable { result in
+        StikJITHelper.enableJIT { result in
             switch result {
             case .success:
                 jitStatus = .available

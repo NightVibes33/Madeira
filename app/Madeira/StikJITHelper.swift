@@ -20,7 +20,7 @@ enum StikJITHelper {
             case .invalidRequest:
                 return "Madeira could not create the StikDebug request."
             case .unavailable:
-                return "StikDebug is not installed. Install it, or configure Built-in StikJIT."
+                return "StikDebug/StikJIT is not installed or did not accept the SteamIOS JIT request."
             case .timedOut:
                 return "StikDebug did not attach to Madeira within 90 seconds. Check its pairing file and LocalDevVPN, then try again."
             }
@@ -37,7 +37,7 @@ enum StikJITHelper {
     /// Check whether StikDebug is installed. `stikdebug` is its canonical scheme;
     /// the older `stikjit` alias remains declared for compatibility.
     static var isAvailable: Bool {
-        guard let url = URL(string: "stikdebug://enable-jit") else { return false }
+        guard let url = URL(string: "stikjit://enable-jit") else { return false }
         return UIApplication.shared.canOpenURL(url)
     }
 
@@ -51,11 +51,10 @@ enum StikJITHelper {
             return
         }
         var components = URLComponents()
-        components.scheme = "stikdebug"
+        components.scheme = "stikjit"
         components.host = "enable-jit"
         components.queryItems = [
             URLQueryItem(name: "bundle-id", value: bundleID),
-            URLQueryItem(name: "pid", value: String(getpid())),
             URLQueryItem(name: "script-data", value: scriptData.base64EncodedString()),
         ]
         guard let url = components.url else {

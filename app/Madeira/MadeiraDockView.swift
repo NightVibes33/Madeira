@@ -3,8 +3,227 @@
 // Madeira Converter Exception: see LICENSE-EXCEPTION.md
 
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
-/// State of the Madeira Dock sheet: sign-in, Valve's client components, the
+
+/// Optional external Steam library. The user grants one folder through the
+/// Files picker; SteamIOS keeps a security-scoped bookmark for that folder,
+/// exposes it to Wine as E:, and also presents the same storage through the
+/// fixed C:\\SteamIOSExternal symlink so upstream SteamIOS Dock can keep its
+/// existing C:-relative launch paths unchanged.
+@MainActor
+final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDelegate {
+    static let shared = ExternalSteamDrive()
+
+    @Published private(set) var configured = false
+    @Published private(set) var displayName = "Not connected"
+
+    private let bookmarkKey = "SteamIOS.ExternalDriveBookmark.v1"
+    private let contentIDKey = "SteamIOS.ExternalDriveContentID.v1"
+    private var scopedURL: URL?
+
+    override private init() { super.init() }
+
+    func presentPicker() {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        picker.allowsMultipleSelection = false
+        picker.delegate = self
+        guard let presenter = Self.topViewController() else {
+            LogStore.shared.log("[external-drive] no active presenter", level: .error)
+            return
+        }
+        presenter.present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        activate(url)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {}
+
+    func restoreAndMountIfAvailable() {
+        if let scopedURL {
+            do {
+                try configureMount(at: scopedURL)
+                configured = true
+                displayName = scopedURL.lastPathComponent
+            } catch {
+                configured = false
+                LogStore.shared.log("[external-drive] remount failed: \(error.localizedDescription)", level: .error)
+            }
+            return
+        }
+        guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
+        var stale = false
+        do {
+            let url = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil,
+                              bookmarkDataIsStale: &stale)
+            guard url.startAccessingSecurityScopedResource() else {
+                throw NSError(domain: "SteamIOS.ExternalDrive", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "The external drive permission is no longer available. Choose the drive again."])
+            }
+            scopedURL = url
+            if stale { try saveBookmark(for: url) }
+            try configureMount(at: url)
+            configured = true
+            displayName = url.lastPathComponent
+            LogStore.shared.log("[external-drive] restored \(url.lastPathComponent)", level: .success)
+        } catch {
+            configured = false
+            LogStore.shared.log("[external-drive] restore failed: \(error.localizedDescription)", level: .error)
+        }
+    }
+
+    private func activate(_ url: URL) {
+        if let old = scopedURL, old != url { old.stopAccessingSecurityScopedResource() }
+        guard url.startAccessingSecurityScopedResource() else {
+            LogStore.shared.log("[external-drive] access denied", level: .error)
+            return
+        }
+        do {
+            try saveBookmark(for: url)
+            scopedURL = url
+            try configureMount(at: url)
+            configured = true
+            displayName = url.lastPathComponent
+            LogStore.shared.log("[external-drive] ready: \(url.path)", level: .success)
+            MadeiraDockModel.shared.refresh()
+        } catch {
+            if scopedURL == url { scopedURL = nil; url.stopAccessingSecurityScopedResource() }
+            configured = false
+            LogStore.shared.log("[external-drive] setup failed: \(error.localizedDescription)", level: .error)
+        }
+    }
+
+    private func saveBookmark(for url: URL) throws {
+        let data = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        UserDefaults.standard.set(data, forKey: bookmarkKey)
+    }
+
+    private func configureMount(at selectedRoot: URL) throws {
+        let fm = FileManager.default
+        let externalRoot = selectedRoot.appendingPathComponent("SteamIOS", isDirectory: true)
+        let library = externalRoot.appendingPathComponent("SteamLibrary", isDirectory: true)
+
+        var coordinationError: NSError?
+        var setupError: Error?
+        NSFileCoordinator().coordinate(writingItemAt: selectedRoot, options: .forMerging,
+                                       error: &coordinationError) { coordinatedRoot in
+            do {
+                let root = coordinatedRoot.appendingPathComponent("SteamIOS", isDirectory: true)
+                let lib = root.appendingPathComponent("SteamLibrary", isDirectory: true)
+                for sub in ["steamapps/common", "steamapps/downloading", "steamapps/workshop", "steamapps/shadercache"] {
+                    try fm.createDirectory(at: lib.appendingPathComponent(sub, isDirectory: true),
+                                           withIntermediateDirectories: true)
+                }
+                let probe = root.appendingPathComponent(".steamios-write-test")
+                try Data("SteamIOS".utf8).write(to: probe, options: .atomic)
+                try fm.removeItem(at: probe)
+            } catch { setupError = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let setupError { throw setupError }
+
+        let prefix = MadeiraDock.prefix
+        let dosDevices = prefix.appendingPathComponent("dosdevices", isDirectory: true)
+        let driveC = MadeiraDock.drive
+        try fm.createDirectory(at: dosDevices, withIntermediateDirectories: true)
+        try fm.createDirectory(at: driveC, withIntermediateDirectories: true)
+
+        try replaceSymlink(at: dosDevices.appendingPathComponent("e:"), destination: externalRoot.path)
+        try replaceSymlink(at: driveC.appendingPathComponent("SteamIOSExternal"), destination: externalRoot.path)
+        try registerLibraryWithSteam()
+    }
+
+    private func replaceSymlink(at link: URL, destination: String) throws {
+        let fm = FileManager.default
+        if let current = try? fm.destinationOfSymbolicLink(atPath: link.path), current == destination { return }
+        try? fm.removeItem(at: link)
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: destination)
+    }
+
+    private func registerLibraryWithSteam() throws {
+        guard MadeiraDock.clientInstalled else { return }
+        let fm = FileManager.default
+        let steamApps = MadeiraDock.clientRoot.appendingPathComponent("steamapps", isDirectory: true)
+        try fm.createDirectory(at: steamApps, withIntermediateDirectories: true)
+        let vdf = steamApps.appendingPathComponent("libraryfolders.vdf")
+        let externalPath = #"C:\\SteamIOSExternal\\SteamLibrary"#
+
+        var text: String
+        if let existing = try? String(contentsOf: vdf, encoding: .utf8),
+           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = existing
+        } else {
+            let internalPath = SteamRuntimeFiles.windowsRoot.replacingOccurrences(of: "\\", with: "\\\\")
+            text = """
+            "libraryfolders"
+            {
+                "0"
+                {
+                    "path" "\(internalPath)"
+                    "label" ""
+                    "contentid" "1"
+                    "totalsize" "0"
+                    "update_clean_bytes_tally" "0"
+                    "time_last_update_corruption" "0"
+                    "apps"
+                    {
+                    }
+                }
+            }
+            """
+        }
+        if text.contains(#""path" "C:\\SteamIOSExternal\\SteamLibrary""#) { return }
+
+        let defaults = UserDefaults.standard
+        let contentID: String
+        if let saved = defaults.string(forKey: contentIDKey) {
+            contentID = saved
+        } else {
+            contentID = String(UInt64.random(in: 1_000_000_000_000_000_000...8_999_999_999_999_999_999))
+            defaults.set(contentID, forKey: contentIDKey)
+        }
+
+        let block = """
+
+                "9000"
+                {
+                    "path" "\(externalPath)"
+                    "label" "SteamIOS External"
+                    "contentid" "\(contentID)"
+                    "totalsize" "0"
+                    "update_clean_bytes_tally" "0"
+                    "time_last_update_corruption" "0"
+                    "apps"
+                    {
+                    }
+                }
+        """
+        guard let closing = text.lastIndex(of: "}") else {
+            throw NSError(domain: "SteamIOS.ExternalDrive", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Steam libraryfolders.vdf is malformed."])
+        }
+        text.insert(contentsOf: block, at: closing)
+        try text.write(to: vdf, atomically: true, encoding: .utf8)
+        LogStore.shared.log("[external-drive] Steam library registered at C:\\SteamIOSExternal\\SteamLibrary", level: .success)
+    }
+
+    private static func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        var controller = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? scene?.windows.first?.rootViewController
+        while let presented = controller?.presentedViewController { controller = presented }
+        if let nav = controller as? UINavigationController { return nav.visibleViewController ?? nav }
+        if let tab = controller as? UITabBarController { return tab.selectedViewController ?? tab }
+        return controller
+    }
+}
+
+/// State of the SteamIOS Dock sheet: sign-in, Valve's client components, the
 /// installed games and the last Dock result.
 @MainActor
 final class MadeiraDockModel: ObservableObject {
@@ -73,7 +292,7 @@ final class MadeiraDockModel: ObservableObject {
     /// without one, then removes any unconsumed sign-in transfer.
     func watchReport() {
         watch?.cancel()
-        let starting = "Madeira Dock is starting. Valve's client signs in and checks the license."
+        let starting = "SteamIOS Dock is starting. Valve's client signs in and checks the license."
         let plan = DockInstallers.note
         status = plan.map { $0 + "\n" + starting } ?? starting
         if let plan { LogStore.shared.log("[dock-installers] " + plan) }
@@ -92,7 +311,7 @@ final class MadeiraDockModel: ObservableObject {
                         status = failure
                         LogStore.shared.log("[madeira-dock] " + failure, level: .error)
                     } else {
-                        status = "Madeira Dock finished normally."
+                        status = "SteamIOS Dock finished normally."
                         LogStore.shared.log("[madeira-dock] host finished (result 0)")
                     }
                     break
@@ -110,7 +329,7 @@ final class MadeiraDockModel: ObservableObject {
                     break
                 }
                 if started && idle >= 5 {
-                    status = "Madeira Dock stopped before reporting a result. Export the log."
+                    status = "SteamIOS Dock stopped before reporting a result. Export the log."
                     LogStore.shared.log("[madeira-dock] session ended without a host result", level: .error)
                     break
                 }
@@ -123,10 +342,11 @@ final class MadeiraDockModel: ObservableObject {
     }
 }
 
-/// Madeira Dock sheet, opened from the developer interface.
+/// SteamIOS Dock sheet, opened from the developer interface.
 struct MadeiraDockView: View {
     @ObservedObject private var dock = MadeiraDockModel.shared
     @ObservedObject private var signIn = SteamSignInModel.shared
+    @ObservedObject private var externalDrive = ExternalSteamDrive.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showSignIn = false
     let start: (DockGame, Bool) -> Void
@@ -135,7 +355,7 @@ struct MadeiraDockView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Madeira Dock starts an installed Steam game through Valve's own Steam client, without the Steam desktop window. Valve's client signs in with your account and decides whether the game may run.")
+                    Text("SteamIOS Dock starts an installed Steam game through Valve's own Steam client, without the Steam desktop window. Valve's client signs in with your account and decides whether the game may run.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Steam account") {
@@ -157,8 +377,18 @@ struct MadeiraDockView: View {
                     Text("Downloaded from Valve's update servers and checked against pinned SHA-256 sums. Existing Steam files are kept.")
                 }
                 Section {
+                    Button(externalDrive.configured ? "Change external drive" : "Choose external drive") {
+                        externalDrive.presentPicker()
+                    }
+                    if externalDrive.configured {
+                        Label("External library ready on \(externalDrive.displayName)", systemImage: "externaldrive.fill")
+                    }
+                } header: { Text("External drive") } footer: {
+                    Text("Optional. SteamIOS maps the chosen folder into Wine and registers C:\\SteamIOSExternal\\SteamLibrary with Steam. Internal storage remains unchanged.")
+                }
+                Section {
                     if dock.games.isEmpty {
-                        Text("No installed Steam games were found in the Steam library in drive_c.").foregroundStyle(.secondary)
+                        Text("No installed Steam games were found in the internal or connected external Steam libraries.").foregroundStyle(.secondary)
                     }
                     ForEach(dock.games) { game in
                         Button { start(game, dock.compactPool); dismiss() } label: {
@@ -195,9 +425,9 @@ struct MadeiraDockView: View {
                     Section { Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
                 }
             }
-            .navigationTitle("Madeira Dock").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("SteamIOS Dock").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-            .onAppear { dock.refresh(); signIn.refresh() }
+            .onAppear { externalDrive.restoreAndMountIfAvailable(); dock.refresh(); signIn.refresh() }
             .sheet(isPresented: $showSignIn) { SteamSignInView() }
         }
     }

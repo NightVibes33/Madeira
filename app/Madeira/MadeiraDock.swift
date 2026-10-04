@@ -108,7 +108,7 @@ enum MadeiraDock {
         var result: [DockGame] = []
         for library in libraries.prefix(16) {
             let folder = drive.appendingPathComponent(library, isDirectory: true)
-            guard folder.resolvingSymlinksInPath().path.hasPrefix(drive.resolvingSymlinksInPath().path + "/"),
+            guard approvedLibraryFolder(folder, drive: drive),
                   let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
             for file in names.sorted().prefix(2000) where file.hasPrefix("appmanifest_") && file.hasSuffix(".acf") {
                 guard let data = try? Data(contentsOf: folder.appendingPathComponent(file)),
@@ -118,6 +118,19 @@ enum MadeiraDock {
             }
         }
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// A Steam library may live inside drive_c or under SteamIOS's one fixed
+    /// security-scoped external mount. No arbitrary symlink escapes are accepted.
+    static func approvedLibraryFolder(_ folder: URL, drive: URL) -> Bool {
+        let resolved = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        let internalRoot = drive.resolvingSymlinksInPath().standardizedFileURL.path
+        if resolved == internalRoot || resolved.hasPrefix(internalRoot + "/") { return true }
+
+        let mount = drive.appendingPathComponent("SteamIOSExternal", isDirectory: true)
+        let externalRoot = mount.resolvingSymlinksInPath().standardizedFileURL.path
+        guard externalRoot != mount.standardizedFileURL.path else { return false }
+        return resolved == externalRoot || resolved.hasPrefix(externalRoot + "/")
     }
 
     /// "C:\\Games\\SteamLibrary" -> "Games/SteamLibrary/steamapps" (C: only).

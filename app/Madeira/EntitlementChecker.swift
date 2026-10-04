@@ -156,8 +156,7 @@ enum DeviceDiagnostics {
             + " extended-va=\(entitlements.extendedVA ? 1 : 0)")
         log.log("[device] signing: \(signing()) \(profile())")
         if !SigningStatus.current.debuggable {
-            log.log("[device] this copy is signed without get-task-allow: no debugger can attach to it, so JIT cannot be "
-                + "enabled. Reinstall Madeira with a development certificate.", level: .error)
+            log.log("[jit-signing] get-task-allow is not present; SteamIOS will still try its custom StikDebug/StikJIT bridge.")
         }
         if StikJITHelper.flaggedWithoutDebugger {
             log.log("[jit-debugger] CS_DEBUGGED is set but no debugger is attached at start-up: JIT was enabled "
