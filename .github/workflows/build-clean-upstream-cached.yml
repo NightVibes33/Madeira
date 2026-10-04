@@ -159,6 +159,7 @@ jobs:
           bash build/gnutls-ios/build.sh
           bash build/freetype-ios/build.sh
           bash build/ffmpeg/build.sh
+          python3 tools/patches/apply-fex-ios-apple-runtime.py FEX
           bash build/fex-ios/build.sh
           bash build/wineserver/build.sh all
           bash build/ntdll-unix/build.sh
