@@ -7,6 +7,8 @@ set -eu
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
+python3 "$REPO_ROOT/tools/patches/apply-dxmt-stdlib-headers.py" "$REPO_ROOT/dxmt"
+python3 "$BUILD_DIR/apply-xcode27-source-fixes.py" "$REPO_ROOT/dxmt"
 DXMT_SRC="$REPO_ROOT/dxmt/src"
 DXMT_ROOT="$REPO_ROOT/dxmt"
 LLVM_SRC="$REPO_ROOT/toolchains/llvm-project/llvm"
@@ -182,6 +184,19 @@ echo "=== winemetal unix (Objective-C) ==="
 compile_objc "$DXMT_SRC/winemetal/unix/winemetal_unix.c" winemetal_unix
 compile_objc "$DXMT_SRC/winemetal/unix/cache.c"          cache
 
+echo "=== airconv embedded Metal helper AIR ==="
+mkdir -p "$BUILD_DIR/shader-headers"
+for shader in air_msad air_samplepos air_tessellation; do
+    src="$DXMT_SRC/airconv/shaders/$shader.metal"
+    air="$BUILD_DIR/shader-headers/$shader.air"
+    hdr="$BUILD_DIR/shader-headers/$shader.h"
+    xcrun -sdk macosx metal -std=metal3.1 --target=air64-apple-macos14.0 \
+        -o "$air" -c "$src"
+    xxd -n "$shader" -i "$air" "$hdr"
+    test -s "$hdr"
+    echo "  $shader.h                               OK"
+done
+
 echo "=== airconv (C++ 20, needs LLVM headers) ==="
 for cpp in airconv_context.cpp air_type.cpp air_signature.cpp air_operations.cpp \
            dxbc_converter.cpp dxbc_converter_gs.cpp dxbc_converter_ts.cpp \
@@ -329,5 +344,14 @@ if [ -f "$COMBINED" ]; then
     APP_COPY="$REPO_ROOT/app/Madeira/libdxmt_combined.a"
     if [ -f "$APP_COPY" ]; then cp "$COMBINED" "$APP_COPY"; echo "Staged: $APP_COPY"; fi
 else
-    echo "NOTE: $COMBINED absent; the app links that file, so build it before deploying."
+    echo "=== Creating clean libdxmt_combined.a ==="
+    LLVM_LIB_DIR="$REPO_ROOT/toolchains/llvm-ios-build/lib"
+    if ! compgen -G "$LLVM_LIB_DIR/*.a" >/dev/null; then
+        echo "ERROR: no iOS LLVM archives in $LLVM_LIB_DIR" >&2
+        exit 1
+    fi
+    xcrun -sdk iphoneos libtool -static -o "$COMBINED" "$OBJ_DIR"/*.o "$LLVM_LIB_DIR"/*.a
+    echo "Combined: $COMBINED ($(wc -c < "$COMBINED" | tr -d ' ') bytes)"
+    cp "$COMBINED" "$REPO_ROOT/app/Madeira/libdxmt_combined.a"
+    echo "Staged: $REPO_ROOT/app/Madeira/libdxmt_combined.a"
 fi
