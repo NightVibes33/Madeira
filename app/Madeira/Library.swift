@@ -894,7 +894,7 @@ final class LibraryModel: ObservableObject {
     /// are still there and init_registry aborts on "\Registry". Madeira asks for
     /// a restart instead. MADEIRA_ONE_SESSION_PER_RUN=0 lets the launch go ahead.
     static var sessionsThisRun = 0
-    static let restartMessage = "Restart Madeira to start another game: swipe Madeira away in the app switcher, then open it again."
+    static let restartMessage = "Restart SteamIOS to start another game: swipe SteamIOS away in the app switcher, then open it again."
     @Published var restartNotice: String?
     /// CS_DEBUGGED is set but no debugger is attached (JIT was enabled outside
     /// Madeira): the text of the alert that offers Madeira's own Enable JIT.
@@ -1280,7 +1280,7 @@ final class LibraryJITState: ObservableObject {
 /// simulators: the M starts on the field's edge to the pixel on both.
 final class LibraryHeaderAlignment: ObservableObject {
     static let shared = LibraryHeaderAlignment()
-    static let title = "Madeira"
+    static let title = "SteamIOS"
     @Published private(set) var shift: CGFloat = 0
     weak var field: UIView?
     weak var anchor: UIView?
@@ -2343,7 +2343,7 @@ struct LibraryView: View {
                         developerUI = on; FrontendChoice.choose(new: !on); restartNotice = true
                     }))
                 } header: { Text("Interface") } footer: {
-                    Text("The developer interface is Madeira's original diagnostic screen. The change applies after Madeira restarts.")
+                    Text("The developer interface is the upstream diagnostic screen. The change applies after SteamIOS restarts.")
                 }
             }
             // Search: the matching options of All settings, editable here.
@@ -2361,14 +2361,14 @@ struct LibraryView: View {
                     MadeiraCredit(name: "bahacan16", handle: "bahacan16", role: "Direct3D 12 and DXMT fixes, game launcher windows, per-game settings, PlayStation controllers, and save backups")
                     MadeiraCredit(name: "spitefulowl", handle: "spitefulowl", role: "Wine and FEX runtime fixes, DXMT texture and memory fixes, audio, the swap tier, and library launch options")
                 } header: { Text("Credits") } footer: {
-                    Text("Madeira is built on Wine, FEX-Emu, DXMT by Feifan He (3Shain) with the Direct3D 9 frontend by David Acevedo (dacevedo12), rpmalloc by Mattias Jansson, StikDebug, StikJIT and idevice. Thank you to everyone who contributes to these projects.")
+                    Text("SteamIOS is built on the upstream Madeira runtime, Wine, FEX-Emu, DXMT by Feifan He (3Shain), the Direct3D 9 frontend by David Acevedo (dacevedo12), rpmalloc by Mattias Jansson, StikDebug, StikJIT and idevice. Thank you to everyone who contributes to these projects.")
                 }
             }
         }
-        .alert("Restart Madeira", isPresented: $restartNotice) {
+        .alert("Restart SteamIOS", isPresented: $restartNotice) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Close Madeira from the app switcher and open it again to switch interfaces.")
+            Text("Close SteamIOS from the app switcher and open it again to switch interfaces.")
         }
         // The Settings sheets hang off the Form, never off one of its rows: a Form
         // may rebuild its rows while a sheet slides up over it, and a sheet whose
@@ -2433,7 +2433,7 @@ struct LibraryView: View {
                             EmptyView()
                         } else if entries.isEmpty {
                             Text(search.isEmpty
-                                 ? "Copy a game's folder into Madeira › wine › drive_c with the Files app, then tap + and choose its .exe."
+                                 ? "Copy a game's folder into SteamIOS › wine › drive_c with the Files app, then tap + and choose its .exe."
                                  : "No other games match your search.")
                                 .foregroundStyle(.secondary)
                         } else {
@@ -2445,7 +2445,7 @@ struct LibraryView: View {
                                           part: steamFirst ? .notInstalled : .all, open: { selected = $0 })
                     }
                 } else if model.entries.filter({ $0.desktop != true && $0.steamAppID == nil }).isEmpty {
-                    ContentUnavailableView("Make yourself at home", systemImage: "gamecontroller", description: Text("Copy a game's folder into Madeira › wine › drive_c with the Files app, then tap + and choose its .exe."))
+                    ContentUnavailableView("Make yourself at home", systemImage: "gamecontroller", description: Text("Copy a game's folder into SteamIOS › wine › drive_c with the Files app, then tap + and choose its .exe."))
                 } else {
                     cells(entries, width: viewport.size.width)
                 }
@@ -2572,7 +2572,7 @@ struct ExecutableBrowser: View {
                     }
                 }
             }
-            if files.isEmpty && error == nil { Text("No executables here. Copy files into Madeira/wine/drive_c using Files.").foregroundStyle(.secondary) }
+            if files.isEmpty && error == nil { Text("No executables here. Copy files into SteamIOS/wine/drive_c using Files.").foregroundStyle(.secondary) }
         }.navigationTitle(folder.lastPathComponent)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         .task {
@@ -2754,7 +2754,7 @@ struct LibraryDetail: View {
                     } header: { Text("Launch") } footer: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Directly: the game is Wine's first program, with no desktop; small windows such as launchers and message boxes are drawn over the game, a window drawn without DirectX that fills the screen is not. In the Wine desktop: the game starts inside the Wine desktop at the Resolution above, where every window shows.")
-                            Text("The working folder is a C:\\ path, for example C:\\Games\\Some Game. Start Windows services first is for launchers that need them (Steam-style COM); Madeira writes a batch file for it in C:\\madeira-games.")
+                            Text("The working folder is a C:\\ path, for example C:\\Games\\Some Game. Start Windows services first is for launchers that need them (Steam-style COM); SteamIOS writes a batch file for it in C:\\madeira-games.")
                             if !entry.runsInDesktop && (entry.isBatch || entry.startServices == true) {
                                 // Wine stops with its first process (the ml1163 open risk).
                                 Text("Started directly, Wine stops when its first program exits, so a batch file that starts the game and exits closes the game too. Start it in the Wine desktop instead.")
@@ -3580,7 +3580,7 @@ struct LibraryHUD: View {
                 Text(entry.title).font(.title2.bold()).multilineTextAlignment(.center)
                 if dockStart.failure == nil { ProgressView().tint(.white) }
                 if let failure = dockStart.failure {
-                    Text("Madeira Dock stopped").font(.headline)
+                    Text("Steam session stopped").font(.headline)
                     Text(failure).font(.caption).multilineTextAlignment(.center).frame(maxWidth: 360)
                 } else if dockStart.active {
                     // What the Dock start is waiting for, from the host's report, and what it
