@@ -18,7 +18,7 @@ import Foundation
 enum SteamInstallPaths {
     /// Library folders relative to drive_c (the value `DockGame.library` has).
     static let libraryRelative = "Program Files (x86)/Steam/steamapps"
-    static let externalLibraryRelative = "SteamIOSExternal/steamapps"
+    static let externalLibraryRelative = "SteamIOSExternal/SteamLibrary/steamapps"
 
     static func steamApps(drive: URL) -> URL {
         steamApps(drive: drive, library: libraryRelative)
