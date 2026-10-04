@@ -142,6 +142,18 @@ jobs:
           fi
           echo "STEAMIOS_EXTERNAL_DEPS_READY"
 
+      - name: Save upstream toolchain/source cache
+        if: steps.source-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            toolchains/llvm-mingw-20260421-ucrt-macos-universal
+            toolchains/llvm-mingw-20260421-ucrt-macos-universal.tar.xz
+            toolchains/llvm-project
+            research/freetype
+            app/Madeira/x86_64-vcruntime
+          key: ${{ steps.source-cache.outputs.cache-primary-key }}
+
       - name: Configure compiler cache
         shell: bash
         run: |
@@ -175,6 +187,16 @@ jobs:
           test -s toolchains/llvm-ios-build/lib/libLLVMSupport.a
           echo "STEAMIOS_LLVM_IOS_READY"
 
+      - name: Save LLVM iOS cache
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            toolchains/llvm-project
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+          key: steamios-clean-llvm-v1-${{ env.LLVM_PIN }}
+
       - name: Configure current Wine build trees
         shell: bash
         run: |
@@ -201,6 +223,8 @@ jobs:
           bash build/gnutls-ios/build.sh
           bash build/freetype-ios/build.sh
           bash build/ffmpeg/build.sh
+          rm -rf FEX/build-ios
+          cmake -S FEX -B FEX/build-ios             -DCMAKE_SYSTEM_NAME=iOS             -DCMAKE_SYSTEM_PROCESSOR=arm64             -DCMAKE_OSX_ARCHITECTURES=arm64             -DCMAKE_OSX_SYSROOT=iphoneos             -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0             -DCMAKE_BUILD_TYPE=Release             -DBUILD_TESTING=OFF             -DBUILD_THUNKS=OFF             -DBUILD_FEXCONFIG=OFF             -DBUILD_FEX_LINUX_TESTS=OFF             -DENABLE_FEX_ALLOCATOR=OFF             -DENABLE_ASSERTIONS=OFF             -DENABLE_CLANG_THUNKS=ON             -DENABLE_CCACHE=ON             -DTUNE_CPU=none
           bash build/fex-ios/build.sh
           bash build/wineserver/build.sh all
           bash build/ntdll-unix/build.sh
