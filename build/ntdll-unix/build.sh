@@ -41,6 +41,7 @@ compile_one() {
         SUCCEEDED=$((SUCCEEDED + 1))
     else
         echo "FAILED"
+        cat "$OBJ_DIR/$name.err"
         FAILED=$((FAILED + 1))
         FAILED_FILES="$FAILED_FILES $name"
     fi
@@ -91,6 +92,23 @@ compile_one "$BUILD_DIR/../madsync/madsync.c" "madsync"   # ml1058: userspace nt
 
 # iOS-Madeira 2026-07-05 (Steam S0): network + crypto unix sides.
 echo "=== Building crypto/network unixlibs ==="
+
+# Clean CI checkouts only have configured Wine build trees here.  The headers
+# consumed by dwrite and winegstreamer are WIDL outputs, not tracked sources,
+# so materialize their complete import closure before compiling the unixlibs.
+IDL_GEN="$REPO_ROOT/tools/runtime-deps/build-wine-idl-headers.py"
+ARM64EC_BUILD="$WINE_SRC/build-arm64ec"
+if [ ! -s "$WINE_BUILD/include/mfobjects.h" ] || [ ! -s "$WINE_BUILD/include/mftransform.h" ]; then
+    python3 "$IDL_GEN" "$WINE_SRC" "$WINE_BUILD" mfobjects.idl mftransform.idl
+fi
+if [ ! -s "$ARM64EC_BUILD/include/dwrite_3.h" ]; then
+    python3 "$IDL_GEN" "$WINE_SRC" "$ARM64EC_BUILD" dwrite_3.idl
+fi
+test -s "$WINE_BUILD/include/mfobjects.h"
+test -s "$WINE_BUILD/include/mftransform.h"
+test -s "$ARM64EC_BUILD/include/dwrite_3.h"
+echo "STEAMIOS_WINE_IDL_HEADERS_READY"
+
 "$CRYPTO_DIR/gen_gnutls_symtab.sh" > /dev/null
 compile_one "$CRYPTO_DIR/gnutls_symtab_ios.c" "gnutls_symtab_ios"
 compile_unixlib "$WINE_SRC/dlls/ws2_32/unixlib.c" "ws2_32_unixlib" "ws2_32" \
