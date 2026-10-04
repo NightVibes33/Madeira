@@ -54,6 +54,7 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
             .appendingPathComponent("wine", isDirectory: true)
         try? FileManager.default.removeItem(at: prefix.appendingPathComponent("dosdevices/e:"))
         try? FileManager.default.removeItem(at: prefix.appendingPathComponent("drive_c/SteamLibraryExternal"))
+        try? FileManager.default.removeItem(at: prefix.appendingPathComponent("drive_c/SteamIOSExternal"))
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
@@ -250,9 +251,20 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
             try? fm.removeItem(at: driveLink)
             try fm.createSymbolicLink(at: driveLink, withDestinationURL: library)
 
-            let fallbackLink = prefixURL
-                .appendingPathComponent("drive_c", isDirectory: true)
-                .appendingPathComponent("SteamLibraryExternal")
+            let driveC = prefixURL.appendingPathComponent("drive_c", isDirectory: true)
+            try fm.createDirectory(at: driveC, withIntermediateDirectories: true)
+
+            // This exact mount name is what MadeiraDock.games/validate already
+            // approves. Keeping the external library under C: means Valve's
+            // client, discovery, direct-start and SteamIOS's downloader all
+            // resolve the same Windows path.
+            let externalMount = driveC.appendingPathComponent("SteamIOSExternal")
+            try? fm.removeItem(at: externalMount)
+            try fm.createSymbolicLink(at: externalMount, withDestinationURL: library)
+
+            // Keep the older aliases for compatibility with builds that already
+            // wrote E:\ or C:\SteamLibraryExternal into config files.
+            let fallbackLink = driveC.appendingPathComponent("SteamLibraryExternal")
             try? fm.removeItem(at: fallbackLink)
             try fm.createSymbolicLink(at: fallbackLink, withDestinationURL: library)
 
@@ -260,7 +272,7 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
 
             isMounted = true
             lastError = nil
-            LogStore.shared.log("[storage] External Steam library mounted as E:\\", level: .success)
+            LogStore.shared.log("[storage] External Steam library mounted at C:\\SteamIOSExternal and E:\\", level: .success)
             return true
         } catch {
             isMounted = false
@@ -270,13 +282,54 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
         }
     }
 
+    /// Returns the SteamApps folder on the selected external drive after
+    /// restoring the security scope and mounting it into drive_c. This is the
+    /// path the native Steam downloader can write to directly.
+    func installSteamApps(prefixURL: URL) -> URL? {
+        guard isConfigured else { return nil }
+        if !scopedAccessActive { restoreBookmark() }
+        guard let library = prepareExternalLibrary() else { return nil }
+
+        do {
+            let fm = FileManager.default
+            let driveC = prefixURL.appendingPathComponent("drive_c", isDirectory: true)
+            try fm.createDirectory(at: driveC, withIntermediateDirectories: true)
+
+            let externalMount = driveC.appendingPathComponent("SteamIOSExternal")
+            let resolvedTarget = library.resolvingSymlinksInPath().standardizedFileURL
+            let currentTarget = externalMount.resolvingSymlinksInPath().standardizedFileURL
+            if currentTarget != resolvedTarget {
+                try? fm.removeItem(at: externalMount)
+                try fm.createSymbolicLink(at: externalMount, withDestinationURL: library)
+            }
+
+            let dosDevices = prefixURL.appendingPathComponent("dosdevices", isDirectory: true)
+            try fm.createDirectory(at: dosDevices, withIntermediateDirectories: true)
+            let driveLink = dosDevices.appendingPathComponent("e:")
+            try? fm.removeItem(at: driveLink)
+            try fm.createSymbolicLink(at: driveLink, withDestinationURL: library)
+
+            isMounted = true
+            lastError = nil
+            return externalMount.appendingPathComponent("steamapps", isDirectory: true)
+        } catch {
+            isMounted = false
+            lastError = "External Steam library could not be mounted: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    var installLabel: String {
+        displayName.map { "\($0) (external)" } ?? "External drive"
+    }
+
     private func updateLibraryFolders(steamDirectory: URL, internalWindowsPath: String) throws {
         let fm = FileManager.default
         let steamapps = steamDirectory.appendingPathComponent("steamapps", isDirectory: true)
         try fm.createDirectory(at: steamapps, withIntermediateDirectories: true)
 
         let vdf = steamapps.appendingPathComponent("libraryfolders.vdf")
-        let externalVDFPath = Self.escapeVDF("E:\\")
+        let externalVDFPath = Self.escapeVDF("C:\\SteamIOSExternal")
 
         var text: String
         if let existing = try? String(contentsOf: vdf, encoding: .utf8),
