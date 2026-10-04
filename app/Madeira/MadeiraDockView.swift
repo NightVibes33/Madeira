@@ -17,13 +17,20 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
     static let shared = ExternalSteamDrive()
 
     @Published private(set) var configured = false
+    @Published private(set) var isMounted = false
     @Published private(set) var displayName = "Not connected"
+    @Published private(set) var lastError: String?
+
+    var isConfigured: Bool { configured }
+    var installLabel: String { configured ? "\(displayName) (external)" : "External drive" }
 
     private let bookmarkKey = "SteamIOS.ExternalDriveBookmark.v1"
     private let contentIDKey = "SteamIOS.ExternalDriveContentID.v1"
     private var scopedURL: URL?
 
     override private init() { super.init() }
+
+    func chooseDirectory() { presentPicker() }
 
     func presentPicker() {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
@@ -48,9 +55,13 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
             do {
                 try configureMount(at: scopedURL)
                 configured = true
+                isMounted = true
+                lastError = nil
                 displayName = scopedURL.lastPathComponent
             } catch {
                 configured = false
+                isMounted = false
+                lastError = error.localizedDescription
                 LogStore.shared.log("[external-drive] remount failed: \(error.localizedDescription)", level: .error)
             }
             return
@@ -68,10 +79,14 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
             if stale { try saveBookmark(for: url) }
             try configureMount(at: url)
             configured = true
+            isMounted = true
+            lastError = nil
             displayName = url.lastPathComponent
             LogStore.shared.log("[external-drive] restored \(url.lastPathComponent)", level: .success)
         } catch {
             configured = false
+            isMounted = false
+            lastError = error.localizedDescription
             LogStore.shared.log("[external-drive] restore failed: \(error.localizedDescription)", level: .error)
         }
     }
@@ -87,13 +102,57 @@ final class ExternalSteamDrive: NSObject, ObservableObject, UIDocumentPickerDele
             scopedURL = url
             try configureMount(at: url)
             configured = true
+            isMounted = true
+            lastError = nil
             displayName = url.lastPathComponent
             LogStore.shared.log("[external-drive] ready: \(url.path)", level: .success)
             MadeiraDockModel.shared.refresh()
         } catch {
             if scopedURL == url { scopedURL = nil; url.stopAccessingSecurityScopedResource() }
             configured = false
+            isMounted = false
+            lastError = error.localizedDescription
             LogStore.shared.log("[external-drive] setup failed: \(error.localizedDescription)", level: .error)
+        }
+    }
+
+    func clearSelection() {
+        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        UserDefaults.standard.removeObject(forKey: contentIDKey)
+        scopedURL?.stopAccessingSecurityScopedResource()
+        scopedURL = nil
+        configured = false
+        isMounted = false
+        displayName = "Not connected"
+        lastError = nil
+
+        let fm = FileManager.default
+        let prefix = MadeiraDock.prefix
+        try? fm.removeItem(at: prefix.appendingPathComponent("dosdevices/e:"))
+        try? fm.removeItem(at: MadeiraDock.drive.appendingPathComponent("SteamIOSExternal"))
+        LogStore.shared.log("[external-drive] selection cleared")
+    }
+
+    /// Returns the external SteamApps folder through the fixed C: mount used
+    /// by the launcher. The bookmark is restored automatically after relaunch.
+    func installSteamApps(prefixURL: URL = MadeiraDock.prefix) -> URL? {
+        restoreAndMountIfAvailable()
+        guard configured, isMounted else { return nil }
+        let apps = MadeiraDock.drive
+            .appendingPathComponent("SteamIOSExternal", isDirectory: true)
+            .appendingPathComponent("SteamLibrary/steamapps", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: apps.appendingPathComponent("common", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+            try registerLibraryWithSteam()
+            return apps
+        } catch {
+            isMounted = false
+            lastError = error.localizedDescription
+            LogStore.shared.log("[external-drive] install mount failed: \(error.localizedDescription)", level: .error)
+            return nil
         }
     }
 
