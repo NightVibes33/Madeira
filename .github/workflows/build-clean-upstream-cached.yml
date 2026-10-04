@@ -1,0 +1,238 @@
+name: Build clean upstream SteamIOS with warmed caches
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [steamios-main-bigpicture]
+    paths:
+      - '.github/workflows/build-clean-upstream-cached.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steamios-clean-warm-cache
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: clean upstream SteamIOS cached build
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CLEAN_REF: steamios-upstream-clean
+
+    steps:
+      - name: Checkout clean upstream branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CLEAN_REF }}
+          fetch-depth: 0
+
+      - name: Install build prerequisites
+        run: brew install bison ccache ninja meson sevenzip cmake pkg-config
+
+      - name: Verify Xcode 27 and Metal
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          [[ "$(xcrun --sdk iphoneos --show-sdk-version)" == 27.* ]]
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx --find metal
+          xcrun --sdk macosx --find metallib
+
+      - name: Restore previously built LLVM
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            wine/build-macos
+            wine/build-arm64ec
+            build/wineserver/obj
+            build/ntdll-unix/obj
+            build/win32u-unix/obj
+            app/Madeira/libwineserver.a
+            app/Madeira/libntdll_unix.a
+            app/Madeira/libwin32u_unix.a
+            toolchains/llvm-host-build
+            toolchains/llvm-ios-build
+            build/dxmt-ios/obj
+            build/dxmt-ios/shader-headers
+            build/dxmt-ios/libdxmt_unix.a
+            build/dxmt-ios/libdxmt_combined.a
+            app/Madeira/libdxmt_combined.a
+          key: steamios-main-native-runtime-v1-8e3d23c77ceb903b59fdd8c123c867b7591490d5-a5e0cd3d41bf248fd1c030a2e1c515ba3522f4ef-a52201b19ff63bcfcb5cfc4e8d6b5112a11dd93bbed30ce1199302cb663c6346
+
+      - name: Restore source/toolchain cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            toolchains/llvm-mingw-20260922-ucrt-macos-universal
+            toolchains/llvm-project
+            research/freetype
+            app/Madeira/x86_64-vcruntime
+          key: steamios-main-sources-v2-d2585878f893f9169c26dfa15b2bcc90f318527c19f3e5c3c1fa4213afde3939
+
+      - name: Restore GnuTLS and FreeType cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            toolchains/gnutls-ios
+            build/gnutls-ios/obj
+            build/freetype-ios/build
+            FEX/build-ios
+          key: steamios-main-native-fex-v2-26859e184ad90f0e811d7f8bbd943a4b1573a2c3-87caaebb7600a75ff8d0624f6611cf9b645e38f1d59645488dc6549887882ddb
+
+      - name: Drop stale old-source build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the source-independent LLVM/GnuTLS/FreeType caches, but rebuild
+          # everything tied to Madeira's current FEX/Wine/DXMT submodule SHAs.
+          rm -rf FEX/build-ios
+          rm -rf wine/build-macos wine/build-arm64ec wine/build-i386
+          rm -rf build/wineserver/obj build/ntdll-unix/obj build/win32u-unix/obj
+          rm -rf build/dxmt-ios/obj build/dxmt-ios/shader-headers
+          rm -f build/dxmt-ios/libdxmt_unix.a build/dxmt-ios/libdxmt_combined.a
+          rm -f app/Madeira/libwineserver.a app/Madeira/libntdll_unix.a app/Madeira/libwin32u_unix.a app/Madeira/libdxmt_combined.a
+
+      - name: Materialize exact upstream submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          retry() { local n=0; until "$@"; do n=$((n+1)); [ "$n" -lt 4 ] || return 1; sleep $((n*5)); done; }
+          for s in FEX wine dxmt madeira-dock; do
+            retry git -c http.version=HTTP/1.1 submodule update --init --recursive --depth 1 "$s"
+          done
+          echo "FEX=$(git -C FEX rev-parse HEAD)"
+          echo "WINE=$(git -C wine rev-parse HEAD)"
+          echo "DXMT=$(git -C dxmt rev-parse HEAD)"
+          echo "DOCK=$(git -C madeira-dock rev-parse HEAD)"
+
+      - name: Bootstrap upstream llvm-mingw 20260421
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME=llvm-mingw-20260421-ucrt-macos-universal
+          DEST="$PWD/toolchains/$NAME"
+          ARCHIVE="$PWD/toolchains/$NAME.tar.xz"
+          URL="https://github.com/mstorsjo/llvm-mingw/releases/download/20260421/$NAME.tar.xz"
+          EXPECTED=bd85a3975723815cef28dbbd2ca2cb0c926f6b348a12a0453f39f7af273cb3f7
+          mkdir -p toolchains
+          if [[ ! -x "$DEST/bin/aarch64-w64-mingw32-clang" ]]; then
+            curl -fL --retry 4 --retry-delay 2 "$URL" -o "$ARCHIVE"
+            [[ "$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')" == "$EXPECTED" ]]
+            tar -xJf "$ARCHIVE" -C toolchains
+          fi
+          test -x "$DEST/bin/aarch64-w64-mingw32-clang"
+          test -x "$DEST/bin/i686-w64-mingw32-clang"
+
+      - name: Verify warmed LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x toolchains/llvm-host-build/bin/llvm-tblgen
+          test -s toolchains/llvm-ios-build/lib/libLLVMSupport.a
+          test -f toolchains/llvm-project/llvm/CMakeLists.txt
+          echo "STEAMIOS_LLVM_CACHE_READY"
+
+      - name: Configure current Wine trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/bison/bin:$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+          mkdir -p wine/build-macos
+          (cd wine/build-macos && ../configure --without-x --disable-tests --enable-winegstreamer)
+          mkdir -p wine/build-arm64ec
+          (cd wine/build-arm64ec && ../configure --enable-archs=arm64ec --without-x --disable-tests --enable-winegstreamer)
+
+      - name: Build current upstream native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/bison/bin:$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+          bash build/gnutls-ios/build.sh
+          bash build/freetype-ios/build.sh
+          bash build/ffmpeg/build.sh
+          bash build/fex-ios/build.sh
+          bash build/wineserver/build.sh all
+          bash build/ntdll-unix/build.sh
+          bash build/win32u-unix/build.sh
+          bash build/dxmt-ios/build.sh
+          rustup target add aarch64-apple-ios
+          bash build/rppairing-ios/build.sh
+          bash build/madeira-dock/build.sh
+
+      - name: Verify current upstream runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore.a
+          test -s FEX/build-ios/FEXCore/Source/libFEXCore_Base.a
+          test -s app/Madeira/libwineserver.a
+          test -s app/Madeira/libntdll_unix.a
+          test -s app/Madeira/libwin32u_unix.a
+          test -s app/Madeira/libdxmt_combined.a
+          test -s app/Madeira/libmadeira_rppairing.a
+          test -s app/Madeira/libavformat.a
+          test -s app/Madeira/arm64ec-windows/dockhost.exe
+          test -s app/Madeira/arm64ec-windows/xtajit64.dll
+          test -s app/Madeira/aarch64-windows/xtajit.dll
+          echo "STEAMIOS_UPSTREAM_RUNTIME_READY"
+
+      - name: Refresh bundled licenses
+        run: bash build/stage-licenses.sh
+
+      - name: Build unsigned iPhoneOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build/steamios-clean-derived
+          xcodebuild \
+            -project app/Madeira.xcodeproj \
+            -scheme Madeira \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/steamios-clean-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee build/steamios-clean-xcodebuild.log
+
+      - name: Package and verify IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find build/steamios-clean-derived/Build/Products/Debug-iphoneos -maxdepth 1 -type d -name 'SteamIOS.app' -print -quit)"
+          test -n "$APP"
+          test -s "$APP/SteamIOS"
+          test -s "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx 'com.nightvibes33.steamios'
+          if find "$APP" -type f -iname 'steam.exe' -print -quit | grep -q .; then
+            echo "error: Steam client must not be bundled" >&2
+            exit 1
+          fi
+          rm -rf artifacts
+          mkdir -p artifacts/Payload
+          /usr/bin/ditto "$APP" artifacts/Payload/SteamIOS.app
+          (cd artifacts && /usr/bin/zip -qry -9 SteamIOS.ipa Payload && rm -rf Payload)
+          shasum -a 256 artifacts/SteamIOS.ipa > artifacts/SteamIOS.ipa.sha256
+          printf 'app_bytes=%s\nipa_bytes=%s\n' "$(du -sk "$APP" | awk '{print $1 * 1024}')" "$(stat -f%z artifacts/SteamIOS.ipa)" > artifacts/size.txt
+          unzip -tq artifacts/SteamIOS.ipa
+          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/SteamIOS\.app/Info\.plist$'
+
+      - name: Upload clean upstream IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamIOS-clean-upstream-unsigned
+          path: |
+            artifacts/SteamIOS.ipa
+            artifacts/SteamIOS.ipa.sha256
+            artifacts/size.txt
+            build/steamios-clean-xcodebuild.log
+          if-no-files-found: error
+          compression-level: 0
