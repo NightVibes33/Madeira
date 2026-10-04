@@ -858,6 +858,7 @@ struct SteamGameSheet: View {
     var open: (LibraryEntry) -> Void
     @ObservedObject private var steam = SteamOwnedLibrary.shared
     @ObservedObject private var games = SteamGamesModel.shared
+    @ObservedObject private var storage = ExternalSteamDrive.shared
     @Environment(\.dismiss) private var dismiss
     @State private var freeSpace: Int64?
     @State private var partial = false
