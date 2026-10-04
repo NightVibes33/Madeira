@@ -43,6 +43,34 @@ if "      }\n#endif\n    }\n  }\n\n  /* iOS-Madeira 2026-05-14: per-thread callr
         raise SystemExit("error: rpmalloc snapshot end anchor drifted")
     text = text.replace(end, end_replacement, 1)
 
+reporter_start = """  {
+    static uint64_t FfsLastCount = 0;
+"""
+reporter_start_replacement = """#ifdef FEX_IOS_HOST
+  {
+    static uint64_t FfsLastCount = 0;
+"""
+if "#ifdef FEX_IOS_HOST\n  {\n    static uint64_t FfsLastCount = 0;" not in text:
+    if text.count(reporter_start) != 1:
+        raise SystemExit("error: FFS reporter start anchor drifted")
+    text = text.replace(reporter_start, reporter_start_replacement, 1)
+
+reporter_end = """                        IosCbEntryLog[4], IosCbEntryLog[5], IosCbEntryLog[7]);
+    }
+  }
+
+  /* iOS-Madeira: refuse to compile obviously-invalid guest RIPs."""
+reporter_end_replacement = """                        IosCbEntryLog[4], IosCbEntryLog[5], IosCbEntryLog[7]);
+    }
+  }
+#endif
+
+  /* iOS-Madeira: refuse to compile obviously-invalid guest RIPs."""
+if "IosCbEntryLog[4], IosCbEntryLog[5], IosCbEntryLog[7]);\n    }\n  }\n#endif\n\n  /* iOS-Madeira: refuse" not in text:
+    if text.count(reporter_end) != 1:
+        raise SystemExit("error: callback reporter end anchor drifted")
+    text = text.replace(reporter_end, reporter_end_replacement, 1)
+
 core.write_text(text)
 
 arm64 = root / "FEXCore/Source/Utils/ArchHelpers/Arm64.cpp"
