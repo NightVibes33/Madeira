@@ -272,16 +272,16 @@ struct OnboardingView: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 20) {
             Image(systemName: "gamecontroller.fill").font(.system(size: 52)).foregroundStyle(.tint).accessibilityHidden(true)
-            Text("Welcome to Madeira").font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
-            Text("Madeira runs Windows games on your \(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone").")
+            Text("Welcome to SteamIOS").font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
+            Text("SteamIOS runs Windows games on your \(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone").")
                 .font(.title3)
             Text("A few optional steps get you ready:").foregroundStyle(.secondary)
             let pages = model.steps
             let offered: [LocalizedStringKey] =
-                (pages.contains(.localDevVPN) ? ["Install LocalDevVPN, which Madeira enables JIT through."] : [])
-                + ["Choose how Madeira enables JIT."]
-                + (pages.contains(.signIn) ? ["Sign in to Steam in Madeira."] : [])
-                + (pages.contains(.dockClient) ? ["Download Valve's Steam client components for Madeira Dock."] : [])
+                (pages.contains(.localDevVPN) ? ["Install LocalDevVPN, which SteamIOS enables JIT through."] : [])
+                + ["Choose how SteamIOS enables JIT."]
+                + (pages.contains(.signIn) ? ["Sign in to Steam in SteamIOS."] : [])
+                + (pages.contains(.dockClient) ? ["Download Valve's Steam client components for SteamIOS."] : [])
             ForEach(offered.indices, id: \.self) { index in point(index + 1, offered[index]) }
             primary("Get started", symbol: "arrow.right") { model.next() }.padding(.top, 8)
             secondary("Skip setup") { model.skip() }
@@ -294,7 +294,7 @@ struct OnboardingView: View {
     private var localDevVPNPage: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Install LocalDevVPN", symbol: "network")
-            Text("Madeira enables JIT through LocalDevVPN, a free app that gives Madeira a network path to this \(device). Install it from the App Store, then come back.")
+            Text("SteamIOS enables JIT through LocalDevVPN, a free app that gives Madeira a network path to this \(device). Install it from the App Store, then come back.")
                 .fixedSize(horizontal: false, vertical: true)
             if localDevVPNInstalled {
                 Label("LocalDevVPN is installed", systemImage: "checkmark.circle.fill")
@@ -333,7 +333,7 @@ struct OnboardingView: View {
                 jitChoice("In-app", symbol: "iphone.radiowaves.left.and.right",
                           detail: !OnDevicePairing.isSupported ? "Needs iOS 27 or later."
                               : pairedOnDevice ? "Paired on this \(device)."
-                              : "Pair this \(device) with Madeira in Settings. No computer needed.",
+                              : "Pair this \(device) with SteamIOS in Settings. No computer needed.",
                           done: pairedOnDevice, enabled: OnDevicePairing.isSupported) { choose(.onDevice) }
                 jitChoice("In-app with pairing file", symbol: "doc.badge.plus",
                           detail: fileImported ? "Pairing file imported." : "Use a pairing file made on a computer.",
@@ -354,7 +354,7 @@ struct OnboardingView: View {
                       done: pairing.phase != .idle || pairedOnDevice)
                 point(2, "Open Settings › Privacy & Security › Developer Mode, scroll down and tap **Pair with \(OnDevicePairing.hostName)**.",
                       done: pairing.isShowingPin || pairedOnDevice)
-                point(3, "Enter the code Madeira shows. It's also in the banner at the top of the screen and in a notification.",
+                point(3, "Enter the code SteamIOS shows. It's also in the banner at the top of the screen and in a notification.",
                       done: pairedOnDevice)
             }
             if pairedOnDevice {
@@ -405,7 +405,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 point(1, "Install [StikDebug](https://github.com/StikDebug/StikDebug/releases/latest) and import this \(device)'s pairing file into it.")
                 point(2, "Install and connect [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044).")
-                point(3, "When you play, Madeira opens StikDebug to enable JIT, then comes back.")
+                point(3, "When you play, SteamIOS opens StikDebug to enable JIT, then comes back.")
             }
             primary("Use StikDebug", symbol: "arrow.right") {
                 jit.method = .stikDebug
@@ -424,7 +424,7 @@ struct OnboardingView: View {
 
     private var vpnNoteLabel: some View {
         Label {
-            Text("Before you play, connect [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044). Madeira enables JIT through it.")
+            Text("Before you play, connect [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044). SteamIOS enables JIT through it.")
         } icon: {
             Image(systemName: "network")
         }
@@ -538,8 +538,8 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 18) {
             header("Sign in to Steam", symbol: "person.crop.circle.badge.checkmark")
             Text(model.steps.contains(.dockClient)
-                 ? "When you start a game with Madeira Dock, Madeira hands this sign-in to Valve's own Steam client, which signs in and checks your license."
-                 : "Madeira keeps a Steam sign-in so it can start your Steam games with your own account.")
+                 ? "When you start a game with SteamIOS, SteamIOS hands this sign-in to Valve's own Steam client, which signs in and checks your license."
+                 : "SteamIOS keeps a Steam sign-in so it can start your Steam games with your own account.")
             VStack(alignment: .leading, spacing: 10) {
                 Label("Your password goes only to Steam and is never saved.", systemImage: "lock.fill")
                 Label("The sign-in is kept in this device's Keychain until you sign out.", systemImage: "iphone")
@@ -560,8 +560,8 @@ struct OnboardingView: View {
 
     private var dockClientPage: some View {
         VStack(alignment: .leading, spacing: 18) {
-            header("Prepare Madeira Dock", symbol: "shippingbox")
-            Text("Madeira Dock starts your installed Steam games through Valve's own Steam client, without the Steam desktop window. It needs the client's components, which Madeira downloads from Valve.")
+            header("Prepare Steam", symbol: "shippingbox")
+            Text("SteamIOS starts your installed Steam games through Valve's own Steam client, without the Steam desktop window. It needs the client's components, which SteamIOS downloads from Valve.")
             if dock.clientInstalled {
                 Label("Valve's client components are installed.", systemImage: "checkmark.circle.fill")
                     .font(.headline).foregroundStyle(.green)
@@ -580,7 +580,7 @@ struct OnboardingView: View {
                         dock.prepareClient()
                     }
                 }
-                // A running download continues; Settings › Steam › Madeira Dock shows it.
+                // A running download continues; Settings › Steam › Client shows it.
                 secondary("Set up later") { model.next() }
             }
         }
@@ -591,7 +591,7 @@ struct OnboardingView: View {
             header("You're all set", symbol: "checkmark.seal.fill")
             Text("You can change the JIT method or import a pairing file from Settings › JIT.")
             if model.steps.contains(.dockClient) {
-                Text("Settings › Steam › Madeira Dock lists the Steam games installed in Madeira's drive_c and starts them.")
+                Text("Settings › Steam › Client lists the Steam games installed in Madeira's drive_c and starts them.")
             }
             Text("You can run this setup again from Settings › JIT or Settings › Steam.").foregroundStyle(.secondary)
             primary("Go to your library", symbol: "square.grid.2x2.fill") { model.finish() }
@@ -626,7 +626,7 @@ struct SteamSettingsSection: View {
                 Button { open(.steamSignIn) } label: { Label("Sign in to Steam", systemImage: "person.crop.circle.badge.plus") }
             }
             if MadeiraDock.enabled {
-                Button { open(.dock) } label: { Label("Madeira Dock", systemImage: "shippingbox") }
+                Button { open(.dock) } label: { Label("Steam Client", systemImage: "shippingbox") }
                 if let status = dock.status {
                     Text(status).font(.caption).foregroundStyle(.secondary)
                 }
@@ -637,7 +637,7 @@ struct SteamSettingsSection: View {
         } header: {
             Text("Steam")
         } footer: {
-            Text("Madeira keeps a Steam sign-in token in this device's Keychain, for this device only. Signing out removes it.")
+            Text("SteamIOS keeps a Steam sign-in token in this device's Keychain, for this device only. Signing out removes it.")
         }
         .confirmationDialog("Sign out of Steam?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) { signIn.signOut() }
@@ -657,9 +657,9 @@ extension LibraryEntry {
     /// entry. It is a desktop session: explorer's virtual desktop runs the
     /// host. It is never saved to the library.
     static func dockSession(title: String, width: Int, height: Int) -> LibraryEntry {
-        var entry = LibraryEntry(title: title.isEmpty ? "Madeira Dock" : title, relativePath: "windows/system32/explorer.exe", bits: 64)
+        var entry = LibraryEntry(title: title.isEmpty ? "Steam" : title, relativePath: "windows/system32/explorer.exe", bits: 64)
         entry.id = dockSessionID; entry.desktop = true; entry.resolution = "\(width)x\(height)"
-        entry.graphicsAPI = "Madeira Dock"
+        entry.graphicsAPI = "Steam"
         return entry
     }
 }
