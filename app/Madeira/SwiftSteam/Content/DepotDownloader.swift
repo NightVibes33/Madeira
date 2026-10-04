@@ -111,6 +111,8 @@ final class DepotDownloader {
         for depot in depots {
             try Task.checkCancellation()
             guard let gid = depot.publicManifestID else { continue }
+            let stageStarted = Date()
+            SteamLog.event("[steam-depot] prepare app=\(app.appID) depot=\(depot.depotID) stage=key")
             let key: Data
             do {
                 key = try await depotKey(depotID: depot.depotID, appID: app.appID)
@@ -127,12 +129,28 @@ final class DepotDownloader {
             }
             if session.steamID != 0 { accountID = session.steamID }
             let contentAppID = !app.freeToDownload ? (depot.fromApp ?? app.appID) : app.appID
+            SteamLog.event("[steam-depot] prepare app=\(app.appID) depot=\(depot.depotID) stage=manifest")
             let manifest = try await fetchManifest(depotID: depot.depotID, appID: contentAppID,
                                                    manifestGID: gid, key: key, hosts: hosts)
-            var auth: [String: String] = [:]
-            for host in pool {
-                auth[host] = await cdnAuthFragment(depotID: depot.depotID, appID: contentAppID, host: host)
+
+            // CDN auth used to be requested serially for every host. A slow CM
+            // response could therefore hold the UI in "Preparing" for
+            // hostPoolSize * 10 seconds before a single byte was scheduled.
+            // Start all host-token requests together; SteamCMSession correlates
+            // concurrent service calls by job ID.
+            SteamLog.event("[steam-depot] prepare app=\(app.appID) depot=\(depot.depotID) stage=cdn-auth hosts=\(pool.count)")
+            let authTasks = pool.map { host in
+                Task { @MainActor [weak self] in
+                    let token = await self?.cdnAuthFragment(depotID: depot.depotID, appID: contentAppID, host: host) ?? ""
+                    return (host, token)
+                }
             }
+            var auth: [String: String] = [:]
+            for task in authTasks {
+                let (host, token) = await task.value
+                auth[host] = token
+            }
+            SteamLog.event("[steam-depot] prepare app=\(app.appID) depot=\(depot.depotID) stage=ready seconds=\(Int(Date().timeIntervalSince(stageStarted)))")
             plans.append(DepotPlan(depotID: depot.depotID, manifestGID: gid, key: key, manifest: manifest,
                                    hosts: pool, auth: auth,
                                    declaredSize: depot.publicSizeBytes, health: health))
@@ -157,7 +175,11 @@ final class DepotDownloader {
 
         let remaining = prepared.remainingUncompressed
         if remaining > 0 {
-            let values = try? installURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            // Follow C:\\SteamIOSExternal to the security-scoped volume before
+            // asking for capacity. Otherwise iOS may report the app container's
+            // free space instead of the selected USB volume.
+            let capacityURL = installURL.resolvingSymlinksInPath()
+            let values = try? capacityURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             let available = UInt64(max(0, values?.volumeAvailableCapacityForImportantUsage ?? Int64.max))
             if available < remaining { throw SteamError.insufficientDiskSpace(needed: remaining, available: available) }
         }
@@ -680,7 +702,7 @@ final class DepotDownloader {
     /// depot on this host. An empty token is normal outside regional edge
     /// networks. Cached per depot and host.
     private func cdnAuthFragment(depotID: UInt32, appID: UInt32, host: String) async -> String {
-        let cacheKey = "\(depotID)|\(host)"
+        let cacheKey = "\(appID)|\(depotID)|\(host)"
         if let cached = cdnAuthTokens[cacheKey] { return cached }
 
         // host_name must be the bare hostname, not the https:// URL
