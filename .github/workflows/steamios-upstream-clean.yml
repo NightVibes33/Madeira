@@ -305,7 +305,16 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf build/steamios-clean-derived
-          xcodebuild             -project app/Madeira.xcodeproj             -scheme Madeira             -configuration Debug             -sdk iphoneos             -destination 'generic/platform=iOS'             -derivedDataPath build/steamios-clean-derived             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             build | tee build/steamios-clean-xcodebuild.log
+          xcodebuild \
+            -project app/Madeira.xcodeproj \
+            -scheme Madeira \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/steamios-clean-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build | tee build/steamios-clean-xcodebuild.log
 
       - name: Ad-hoc sign SteamIOS with sideload entitlements
         shell: bash
@@ -352,6 +361,7 @@ jobs:
             echo "error: Steam client leaked into the IPA" >&2
             exit 1
           fi
+
           rm -rf artifacts
           mkdir -p artifacts/Payload
           /usr/bin/ditto "$APP" artifacts/Payload/SteamIOS.app
@@ -360,12 +370,17 @@ jobs:
             /usr/bin/zip -qry -9 SteamIOS.ipa Payload
             rm -rf Payload
           )
+
           shasum -a 256 artifacts/SteamIOS.ipa > artifacts/SteamIOS.ipa.sha256
           app_bytes="$(du -sk "$APP" | awk '{print $1 * 1024}')"
           ipa_bytes="$(stat -f%z artifacts/SteamIOS.ipa)"
           printf 'app_bytes=%s\nipa_bytes=%s\n' "$app_bytes" "$ipa_bytes" | tee artifacts/size.txt
           unzip -tq artifacts/SteamIOS.ipa
-          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/SteamIOS\.app/Info\.plist
+          unzip -Z1 artifacts/SteamIOS.ipa | grep -q '^Payload/SteamIOS\.app/Info\.plist$'
+
+          /usr/bin/codesign -d --entitlements :- "$APP" > artifacts/SteamIOS.entitlements.plist 2>/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.increased-memory-limit' artifacts/SteamIOS.entitlements.plist | grep -qx true
+          echo "STEAMIOS_IPA_OK app_bytes=$app_bytes ipa_bytes=$ipa_bytes memory_plus=embedded"
 
       - name: Cache statistics
         if: always()
@@ -381,28 +396,6 @@ jobs:
             artifacts/SteamIOS.ipa
             artifacts/SteamIOS.ipa.sha256
             artifacts/SteamIOS.entitlements.plist
-            artifacts/size.txt
-            build/steamios-clean-xcodebuild.log
-          if-no-files-found: error
-          compression-level: 0
-
-          /usr/bin/codesign -d --entitlements :- "$APP" > artifacts/SteamIOS.entitlements.plist 2>/dev/null
-          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.kernel.increased-memory-limit' artifacts/SteamIOS.entitlements.plist | grep -qx true
-          echo "STEAMIOS_IPA_OK app_bytes=$app_bytes ipa_bytes=$ipa_bytes memory_plus=embedded"
-
-      - name: Cache statistics
-        if: always()
-        shell: bash
-        run: |
-          ccache --show-stats || true
-
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: SteamIOS-upstream-clean-unsigned
-          path: |
-            artifacts/SteamIOS.ipa
-            artifacts/SteamIOS.ipa.sha256
             artifacts/size.txt
             build/steamios-clean-xcodebuild.log
           if-no-files-found: error
