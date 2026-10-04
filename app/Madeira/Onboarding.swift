@@ -294,7 +294,7 @@ struct OnboardingView: View {
     private var localDevVPNPage: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Install LocalDevVPN", symbol: "network")
-            Text("SteamIOS enables JIT through LocalDevVPN, a free app that gives Madeira a network path to this \(device). Install it from the App Store, then come back.")
+            Text("SteamIOS enables JIT through LocalDevVPN, a free app that gives SteamIOS a network path to this \(device). Install it from the App Store, then come back.")
                 .fixedSize(horizontal: false, vertical: true)
             if localDevVPNInstalled {
                 Label("LocalDevVPN is installed", systemImage: "checkmark.circle.fill")
@@ -328,7 +328,7 @@ struct OnboardingView: View {
     private var jitChoices: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Set up JIT", symbol: "bolt.fill")
-            Text("JIT lets Madeira run Windows code. Choose how your \(device) gets it.")
+            Text("JIT lets SteamIOS run Windows code. Choose how your \(device) gets it.")
             VStack(spacing: 12) {
                 jitChoice("In-app", symbol: "iphone.radiowaves.left.and.right",
                           detail: !OnDevicePairing.isSupported ? "Needs iOS 27 or later."
@@ -591,7 +591,7 @@ struct OnboardingView: View {
             header("You're all set", symbol: "checkmark.seal.fill")
             Text("You can change the JIT method or import a pairing file from Settings › JIT.")
             if model.steps.contains(.dockClient) {
-                Text("Settings › Steam › Client lists the Steam games installed in Madeira's drive_c and starts them.")
+                Text("Settings › Steam › Client lists the Steam games installed in SteamIOS's drive_c and starts them.")
             }
             Text("You can run this setup again from Settings › JIT or Settings › Steam.").foregroundStyle(.secondary)
             primary("Go to your library", symbol: "square.grid.2x2.fill") { model.finish() }
