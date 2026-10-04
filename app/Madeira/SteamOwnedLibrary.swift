@@ -183,12 +183,6 @@ enum SteamInstallLocation: String, CaseIterable, Identifiable {
     case external
 
     var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .internalStorage: return "iPhone / iPad storage"
-        case .external: return ExternalSteamDrive.shared.installLabel
-        }
-    }
 }
 
 @MainActor
