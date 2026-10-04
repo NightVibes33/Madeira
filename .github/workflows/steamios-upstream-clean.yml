@@ -24,6 +24,7 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       LLVM_PIN: 8dfdcc7b7bf66834a761bd8de445840ef68e4d1a
+      UPSTREAM_BASE: bbbf8d0e20fd8b75f433f4a8d2a8eaf8d5571120
 
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +90,29 @@ jobs:
           test "$(git config -f .gitmodules submodule.dxmt.url)" = "https://github.com/willfaust/dxmt.git"
           test "$(git config -f .gitmodules submodule.madeira-dock.url)" = "https://github.com/willfaust/madeira-dock.git"
           echo "STEAMIOS_UPSTREAM_SUBMODULES_READY"
+
+      - name: Verify untouched upstream runtime payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These are upstream's shipped/prebuilt runtime assets. SteamIOS must
+          # consume them exactly as upstream committed them instead of rebuilding
+          # its own ARM64EC/aarch64 Windows farms.
+          git diff --exit-code "$UPSTREAM_BASE" -- \
+            app/Madeira/aarch64-windows \
+            app/Madeira/arm64ec-windows \
+            app/Madeira/d3d12/libmetalirconverter.dylib \
+            app/Madeira/libgmp.a \
+            app/Madeira/libnettle.a \
+            app/Madeira/libhogweed.a \
+            app/Madeira/libgnutls.a
+          test -s app/Madeira/arm64ec-windows/xtajit64.dll
+          test -s app/Madeira/aarch64-windows/xtajit.dll
+          test -s app/Madeira/arm64ec-windows/ntdll.dll
+          test -s app/Madeira/arm64ec-windows/dxgi.dll
+          test -s app/Madeira/arm64ec-windows/d3d11.dll
+          test -s app/Madeira/d3d12/libmetalirconverter.dylib
+          echo "STEAMIOS_UPSTREAM_TRACKED_RUNTIME_OK"
 
       - name: Bootstrap pinned external dependencies
         shell: bash
@@ -215,12 +239,18 @@ jobs:
           )
           echo "STEAMIOS_WINE_CONFIGURED"
 
-      - name: Build native dependencies
+      - name: Build only upstream-untracked native dependencies
         shell: bash
         run: |
           set -euo pipefail
           export PATH="/opt/homebrew/opt/bison/bin:$PWD/toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin:$PATH"
+          # Upstream tracks the four final GnuTLS-family archives. Run its
+          # build only to materialize the generated headers needed by Wine, then
+          # restore the exact upstream archives before linking.
           bash build/gnutls-ios/build.sh
+          git checkout "$UPSTREAM_BASE" -- \
+            app/Madeira/libgmp.a app/Madeira/libnettle.a \
+            app/Madeira/libhogweed.a app/Madeira/libgnutls.a
           bash build/freetype-ios/build.sh
           bash build/ffmpeg/build.sh
           python3 tools/patches/apply-fex-ios-apple-runtime.py FEX
