@@ -25,7 +25,7 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CLEAN_REF: steamios-upstream-clean
-      # Clean branch carries the macOS/iOS FEX processor/tuning build fixes.
+      # Clean branch carries the macOS/iOS FEX processor/tuning and host-boundary build fixes.
 
     steps:
       - name: Checkout clean upstream branch
