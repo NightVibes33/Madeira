@@ -13,5 +13,11 @@ if [ ! -f "$B/CMakeCache.txt" ]; then
         -DENABLE_FEX_ALLOCATOR=OFF -DENABLE_ASSERTIONS=OFF -DENABLE_CLANG_THUNKS=ON -DENABLE_CCACHE=ON \
         -DTUNE_CPU=none
 fi
-cmake --build "$B" --target FEXCore FEXCore_Base
+# Madeira's Xcode target links all three upstream FEX archives. JemallocLibs
+# remains required on Apple even when the Linux-specific allocators are disabled;
+# in that configuration it is the allocator-hooks archive without rpmalloc/jemalloc.
+cmake --build "$B" --target FEXCore FEXCore_Base JemallocLibs
+test -s "$B/FEXCore/Source/libFEXCore.a"
+test -s "$B/FEXCore/Source/libFEXCore_Base.a"
+test -s "$B/FEXCore/Source/libJemallocLibs.a"
 ls "$B/FEXCore/Source/"*.a
